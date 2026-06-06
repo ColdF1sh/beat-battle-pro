@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { BattleStatus } from "@prisma/client";
 
 import {
   ApiAccessError,
@@ -27,6 +28,41 @@ function jsonError(message: string, status: number) {
   return NextResponse.json({ error: message }, { status });
 }
 
+function logSyncStatus(
+  battleId: string,
+  step: string,
+  extra?: Record<string, unknown>,
+) {
+  if (process.env.NODE_ENV !== "production") {
+    console.debug("sync-status", {
+      battleId,
+      step,
+      ...extra,
+    });
+  }
+}
+
+async function runSyncStep<T>(
+  battleId: string,
+  step: string,
+  task: () => Promise<T>,
+) {
+  logSyncStatus(battleId, `${step}:start`);
+
+  try {
+    const result = await task();
+    logSyncStatus(battleId, `${step}:done`);
+    return result;
+  } catch (error) {
+    console.error("sync-status step failed", {
+      battleId,
+      step,
+      error,
+    });
+    throw error;
+  }
+}
+
 export async function POST(
   _request: Request,
   { params }: SyncStatusRouteProps,
@@ -41,16 +77,34 @@ export async function POST(
     }
 
     const { battleId } = parsedParams.data;
-    await getBattleParticipantOrThrow(user.id, battleId);
+    const access = await getBattleParticipantOrThrow(user.id, battleId);
 
-    if (process.env.NODE_ENV !== "production") {
-      console.debug("sync-status called", { battleId });
+    logSyncStatus(battleId, "called", {
+      status: access.battle.status,
+      participantPresence: access.participant.presenceStatus,
+    });
+
+    if (
+      access.battle.status === BattleStatus.FINISHED ||
+      access.battle.status === BattleStatus.CANCELLED
+    ) {
+      logSyncStatus(battleId, "terminal-status");
+
+      return NextResponse.json({
+        status: access.battle.status,
+      });
     }
 
-    await maybeCancelExpiredReadyBattle(battleId);
-    await processReconnectTimeouts(battleId);
+    await runSyncStep(battleId, "maybeCancelExpiredReadyBattle", () =>
+      maybeCancelExpiredReadyBattle(battleId),
+    );
+    await runSyncStep(battleId, "processReconnectTimeouts", () =>
+      processReconnectTimeouts(battleId),
+    );
     try {
-      await advanceDraftIfNeeded(battleId);
+      await runSyncStep(battleId, "advanceDraftIfNeeded", () =>
+        advanceDraftIfNeeded(battleId),
+      );
     } catch (error) {
       if (
         !(error instanceof DraftingError) ||
@@ -59,8 +113,12 @@ export async function POST(
         throw error;
       }
     }
-    await maybeMoveBattleToSubmission(battleId);
-    await maybeMoveBattleToVoting(battleId);
+    await runSyncStep(battleId, "maybeMoveBattleToSubmission", () =>
+      maybeMoveBattleToSubmission(battleId),
+    );
+    await runSyncStep(battleId, "maybeMoveBattleToVoting", () =>
+      maybeMoveBattleToVoting(battleId),
+    );
 
     const battle = await prisma.battle.findUnique({
       where: {
@@ -77,7 +135,9 @@ export async function POST(
     }
 
     if (battle.status === "VOTING" && battle.votingStartedAt) {
-      await maybeFinishBattle(battleId);
+      await runSyncStep(battleId, "maybeFinishBattle", () =>
+        maybeFinishBattle(battleId),
+      );
     }
 
     const syncedBattle = await prisma.battle.findUnique({

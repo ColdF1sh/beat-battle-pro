@@ -38,6 +38,12 @@ function isRapMode(mode: string) {
   return mode.startsWith("rap_");
 }
 
+function logLifecycleDebug(message: string, details: Record<string, unknown>) {
+  if (process.env.NODE_ENV !== "production") {
+    console.debug(`competitive lifecycle: ${message}`, details);
+  }
+}
+
 export function isActiveBattleParticipantEligible(participant: {
   presenceStatus: BattleParticipantPresence;
   forfeited: boolean;
@@ -161,6 +167,14 @@ async function applyPenaltyInTransaction({
               },
             },
           });
+          logLifecycleDebug("leave penalty Elo upsert start", {
+            battleId: battle.id,
+            userId,
+            category: "rap",
+            oldElo,
+            newElo,
+            penalty,
+          });
           await tx.battleEloResult.upsert({
             where: {
               battleId_userId: {
@@ -184,6 +198,11 @@ async function applyPenaltyInTransaction({
               placement,
               totalVotePoints: 0,
             },
+          });
+          logLifecycleDebug("leave penalty Elo upsert done", {
+            battleId: battle.id,
+            userId,
+            category: "rap",
           });
         }
       } else {
@@ -203,6 +222,14 @@ async function applyPenaltyInTransaction({
               },
             },
           });
+          logLifecycleDebug("leave penalty Elo upsert start", {
+            battleId: battle.id,
+            userId,
+            category: "producer",
+            oldElo,
+            newElo,
+            penalty,
+          });
           await tx.battleEloResult.upsert({
             where: {
               battleId_userId: {
@@ -226,6 +253,11 @@ async function applyPenaltyInTransaction({
               placement,
               totalVotePoints: 0,
             },
+          });
+          logLifecycleDebug("leave penalty Elo upsert done", {
+            battleId: battle.id,
+            userId,
+            category: "producer",
           });
         }
       }

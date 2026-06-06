@@ -1003,7 +1003,7 @@ export async function finishBattle(
     return getFinishedBattleResult(battle.id);
   }
 
-  if (battle.eloProcessed || battle.eloResults.length > 0) {
+  if (battle.eloProcessed) {
     console.warn(
       `Duplicate Elo processing attempt ignored for battle ${battle.id}.`,
     );
@@ -1178,7 +1178,7 @@ export async function finishBattle(
       .filter((ranking) => !ranking.technicalLoss)
       .map((ranking) => ranking.points),
   );
-  const eloResults = calculateBattleEloResults(
+  const calculatedEloResults = calculateBattleEloResults(
     battle.participants.map((participant) => ({
       userId: participant.userId,
       eloRating:
@@ -1192,7 +1192,9 @@ export async function finishBattle(
   ).map((result) => ({
     ...result,
     totalVotePoints: scoreByUserId.get(result.userId) ?? 0,
-  })).map((result) => {
+  }));
+  const calculatedPlayerCount = calculatedEloResults.length;
+  const eloResults = calculatedEloResults.map((result) => {
     const participant = battle.participants.find(
       (battleParticipant) => battleParticipant.userId === result.userId,
     );
@@ -1221,7 +1223,7 @@ export async function finishBattle(
       points: ranking?.points ?? 0,
       maxPoints: maxPossiblePoints,
       placement: result.placement,
-      playerCount: eloResults.length,
+      playerCount: calculatedPlayerCount,
       technicalLoss: Boolean(ranking?.technicalLoss),
     });
 
