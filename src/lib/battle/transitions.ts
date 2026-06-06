@@ -56,7 +56,7 @@ export type FinishBattleResult = {
   eloResults?: Array<CalculatedBattleEloResult | PersistedBattleEloResult>;
 };
 
-export const READY_CHECK_DURATION_MS = 15 * 1000;
+export const READY_CHECK_DURATION_MS = 25 * 1000;
 export const VOTING_DURATION_SECONDS = 25;
 const QUALIFICATION_BASE_ELO = 350;
 const QUALIFICATION_ELO_SPREAD = 400;

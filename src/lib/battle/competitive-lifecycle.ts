@@ -430,6 +430,9 @@ export async function getActiveBattleForUser(userId: string) {
       presenceStatus: {
         not: BattleParticipantPresence.ABANDONED,
       },
+      forfeited: false,
+      leftAt: null,
+      leavePenaltyAppliedAt: null,
       battle: {
         status: {
           notIn: [BattleStatus.FINISHED, BattleStatus.CANCELLED],
@@ -444,6 +447,9 @@ export async function getActiveBattleForUser(userId: string) {
       id: true,
       presenceStatus: true,
       reconnectExpiresAt: true,
+      forfeited: true,
+      leftAt: true,
+      leavePenaltyAppliedAt: true,
       battle: {
         select: {
           id: true,

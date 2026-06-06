@@ -126,7 +126,7 @@ export function BattleChatPanel({ battleId }: BattleChatPanelProps) {
 
   return (
     <section
-      className="bb-panel-soft flex h-[420px] min-h-[420px] w-full flex-col p-3 lg:h-[460px] xl:h-[500px]"
+      className="bb-panel-soft flex h-[300px] min-h-[300px] w-full flex-col p-3 lg:h-[320px] xl:h-[340px]"
       data-testid="battle-chat"
     >
       <div className="flex shrink-0 items-center gap-2">
@@ -175,7 +175,7 @@ export function BattleChatPanel({ battleId }: BattleChatPanelProps) {
         )}
       </div>
 
-      <div className="mt-3 flex shrink-0 flex-wrap justify-center gap-1">
+      <div className="mt-2 flex shrink-0 flex-wrap justify-center gap-1">
         {emojis.map((emoji) => (
           <button
             key={emoji}
@@ -188,7 +188,7 @@ export function BattleChatPanel({ battleId }: BattleChatPanelProps) {
         ))}
       </div>
 
-      <div className="mt-3 flex shrink-0 gap-2">
+      <div className="mt-2 flex shrink-0 gap-2">
         <Input
           value={content}
           maxLength={500}

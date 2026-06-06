@@ -1239,7 +1239,10 @@ export default async function BattleRoomPage({ params }: BattleRoomPageProps) {
                     </div>
                   ) : (
                     <div className="rounded-xl border border-white/10 bg-black/30 p-5 text-sm text-zinc-300">
-                      Sound pack is being assigned.
+                      {process.env.STORAGE_PROVIDER === "r2" ||
+                      process.env.VERCEL
+                        ? "No R2 sounds are available for this battle pack. Run pnpm r2:import-library, then start a new producer battle."
+                        : "Sound pack is being assigned."}
                     </div>
                   )}
                 </div>

@@ -3,9 +3,23 @@ import { prisma } from "@/lib/prisma";
 async function main() {
   const avatarResult = await prisma.user.updateMany({
     where: {
-      avatarUrl: {
-        startsWith: "/uploads/",
-      },
+      OR: [
+        {
+          avatarUrl: {
+            startsWith: "/uploads/",
+          },
+        },
+        {
+          avatarUrl: {
+            startsWith: "/demo-audio/",
+          },
+        },
+        {
+          avatarUrl: {
+            startsWith: "http://localhost",
+          },
+        },
+      ],
     },
     data: {
       avatarUrl: null,

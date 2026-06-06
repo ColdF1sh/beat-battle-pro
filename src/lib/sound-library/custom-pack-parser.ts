@@ -6,7 +6,15 @@ import {
   type SoundLibraryCategory,
 } from "@/lib/sound-library/categories";
 
-export const allowedSoundFileExtensions = [".mp3", ".wav", ".flac"] as const;
+export const allowedSoundFileExtensions = [
+  ".mp3",
+  ".wav",
+  ".flac",
+  ".aiff",
+  ".aif",
+  ".ogg",
+  ".m4a",
+] as const;
 
 export type ValidatedSoundFile = {
   isValid: boolean;
@@ -22,6 +30,13 @@ export function getAudioMimeType(extension: string) {
       return "audio/wav";
     case ".flac":
       return "audio/flac";
+    case ".aiff":
+    case ".aif":
+      return "audio/aiff";
+    case ".ogg":
+      return "audio/ogg";
+    case ".m4a":
+      return "audio/mp4";
     default:
       return "application/octet-stream";
   }
