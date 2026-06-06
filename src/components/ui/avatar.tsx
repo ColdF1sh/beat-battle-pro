@@ -27,15 +27,26 @@ function Avatar({
 
 function AvatarImage({
   className,
+  src,
+  onError,
   ...props
 }: React.ComponentProps<typeof AvatarPrimitive.Image>) {
+  if (!src) {
+    return null
+  }
+
   return (
     <AvatarPrimitive.Image
       data-slot="avatar-image"
+      src={src}
       className={cn(
         "aspect-square size-full rounded-full object-cover object-center",
         className
       )}
+      onError={(event) => {
+        event.currentTarget.style.display = "none"
+        onError?.(event)
+      }}
       {...props}
     />
   )

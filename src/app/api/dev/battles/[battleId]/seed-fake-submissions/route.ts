@@ -12,6 +12,11 @@ import {
   isBattleDevToolsEnabled,
 } from "@/lib/battle/dev-tools";
 import { maybeMoveBattleToVoting } from "@/lib/battle/transitions";
+import {
+  isPublicR2Url,
+  requireRemoteAudioUrlInProduction,
+  shouldRequireRemoteAudioUrl,
+} from "@/lib/audio-url";
 import { prisma } from "@/lib/prisma";
 import { battleParamsSchema } from "@/lib/validations/battle";
 
@@ -22,6 +27,55 @@ const demoFiles = [
   "/demo-audio/demo-loop-1.mp3",
   "/demo-audio/demo-melody-1.mp3",
 ];
+
+async function getFakeSubmissionFiles() {
+  if (!shouldRequireRemoteAudioUrl()) {
+    return demoFiles.map((fileUrl) => ({
+      fileUrl,
+      fileName: fileUrl.split("/").pop() ?? "fake-submission.mp3",
+      mimeType: "audio/mpeg",
+      sizeBytes: 1024,
+    }));
+  }
+
+  const sounds = await prisma.soundPackSound.findMany({
+    where: {
+      soundPack: {
+        isActive: true,
+      },
+      fileUrl: {
+        startsWith: process.env.R2_PUBLIC_URL?.replace(/\/$/, "") ?? "https://",
+      },
+    },
+    select: {
+      fileUrl: true,
+      name: true,
+      fileType: true,
+      sizeBytes: true,
+    },
+    orderBy: {
+      fileUrl: "asc",
+    },
+    take: 50,
+  });
+  const candidates = sounds
+    .filter((sound) => isPublicR2Url(sound.fileUrl))
+    .map((sound) => ({
+      fileUrl: sound.fileUrl,
+      fileName: `${sound.name}.mp3`,
+      mimeType: "audio/mpeg",
+      sizeBytes: sound.sizeBytes ?? 1024,
+    }));
+
+  if (candidates.length === 0) {
+    console.warn("No R2 fake submission candidates found.", {
+      storageProvider: process.env.STORAGE_PROVIDER,
+      r2PublicUrlConfigured: Boolean(process.env.R2_PUBLIC_URL),
+    });
+  }
+
+  return candidates;
+}
 
 function isEnabled() {
   return isBattleDevToolsEnabled();
@@ -94,13 +148,27 @@ export async function POST(
     }
 
     const now = new Date();
+    const fakeSubmissionFiles = await getFakeSubmissionFiles();
+
+    if (fakeSubmissionFiles.length === 0) {
+      return NextResponse.json(
+        {
+          error:
+            "No R2 fake submission audio is available. Run pnpm r2:import-library first.",
+        },
+        { status: 400 },
+      );
+    }
+
     let created = 0;
     let updated = 0;
 
     await prisma.$transaction(async (tx) => {
       for (const [index, participant] of fakeParticipants.entries()) {
-        const fileUrl = demoFiles[index % demoFiles.length];
-        const fileName = `${participant.user.username}-submission.mp3`;
+        const file = fakeSubmissionFiles[index % fakeSubmissionFiles.length];
+        const fileUrl = file.fileUrl;
+        const fileName = `${participant.user.username}-${file.fileName}`;
+        requireRemoteAudioUrlInProduction(fileUrl, "dev-fake-submission");
         const existingSubmission = await tx.battleSubmission.findUnique({
           where: {
             battleId_participantId: {
@@ -123,8 +191,8 @@ export async function POST(
           update: {
             fileUrl,
             fileName,
-            mimeType: "audio/mpeg",
-            sizeBytes: 1024,
+            mimeType: file.mimeType,
+            sizeBytes: file.sizeBytes,
           },
           create: {
             battleId,
@@ -132,8 +200,8 @@ export async function POST(
             userId: participant.userId,
             fileUrl,
             fileName,
-            mimeType: "audio/mpeg",
-            sizeBytes: 1024,
+            mimeType: file.mimeType,
+            sizeBytes: file.sizeBytes,
           },
         });
 

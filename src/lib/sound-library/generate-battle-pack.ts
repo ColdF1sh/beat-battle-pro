@@ -16,6 +16,7 @@ export type GeneratedBattlePack = {
 type GenerateBattlePackInput = {
   modeId: string;
   seed?: string;
+  librarySounds?: GlobalLocalSound[];
 };
 
 const fallbackCategories: Partial<
@@ -96,9 +97,10 @@ function isBulletMode(modeId: string) {
 export function generateBattlePack({
   modeId,
   seed = `${modeId}:${Date.now()}`,
+  librarySounds: providedLibrarySounds,
 }: GenerateBattlePackInput): GeneratedBattlePack {
   const random = createSeededRandom(seed);
-  const librarySounds = scanGlobalLocalLibrary();
+  const librarySounds = providedLibrarySounds ?? scanGlobalLocalLibrary();
   const soundsByCategory = buildSoundsByCategory(librarySounds);
   const warnings: string[] = [];
   const selectedSoundIds = new Set<string>();

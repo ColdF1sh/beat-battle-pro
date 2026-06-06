@@ -5,6 +5,12 @@ import {
   analyzeAndCacheRapBeat,
   getPublicAudioFilePath,
 } from "@/lib/audio-analysis";
+import {
+  isLocalAudioUrl,
+  isPublicR2Url,
+  requireRemoteAudioUrlInProduction,
+  shouldRequireRemoteAudioUrl,
+} from "@/lib/audio-url";
 import { prisma } from "@/lib/prisma";
 import { generateBattlePack } from "@/lib/sound-library/generate-battle-pack";
 import {
@@ -12,10 +18,12 @@ import {
   scanGlobalLocalRapBeats,
   warnIfR2UsesLocalDemoAudio,
 } from "@/lib/sound-library/local-library";
+import type { SoundLibraryCategory } from "@/lib/sound-library/categories";
 
 type SoundPackClient = Pick<
   Prisma.TransactionClient,
   | "soundPack"
+  | "soundPackSound"
   | "generatedBattlePack"
   | "generatedBattlePackSound"
   | "rapBeat"
@@ -79,6 +87,67 @@ export function selectRapBeatForSeed(seed: string) {
 }
 
 export async function selectPreparedRapBeatForBattle(seed: string) {
+  if (shouldRequireRemoteAudioUrl()) {
+    const where = {
+      fileUrl: {
+        startsWith: process.env.R2_PUBLIC_URL?.replace(/\/$/, "") ?? "https://",
+      },
+      ...(process.env.STORAGE_PROVIDER === "r2"
+        ? {
+            OR: [
+              { analysisStatus: "COMPLETE" },
+              { analysisStatus: "PENDING" },
+              { analysisStatus: "FAILED" },
+            ],
+          }
+        : {}),
+    };
+    const analyzedBeats = await prisma.rapBeat.findMany({
+      where: {
+        ...where,
+        analysisStatus: "COMPLETE",
+        detectedBpm: {
+          not: null,
+        },
+      },
+      select: {
+        fileUrl: true,
+        fileName: true,
+      },
+      orderBy: {
+        fileUrl: "asc",
+      },
+    });
+    const fallbackBeats = analyzedBeats.length > 0
+      ? analyzedBeats
+      : await prisma.rapBeat.findMany({
+          where,
+          select: {
+            fileUrl: true,
+            fileName: true,
+          },
+          orderBy: {
+            fileUrl: "asc",
+          },
+        });
+    const selected = fallbackBeats[getSeededIndex(seed, fallbackBeats.length)] ?? null;
+
+    if (!selected) {
+      console.warn(
+        "No R2 RapBeat rows are available. Run pnpm r2:import-library before starting rap battles on Vercel/test.",
+      );
+      return null;
+    }
+
+    return {
+      id: selected.fileUrl,
+      fileName: selected.fileName,
+      fileUrl: selected.fileUrl,
+      sizeBytes: 0,
+      mimeType: "audio/mpeg",
+    };
+  }
+
   const localBeats = scanGlobalLocalRapBeats();
   const localUrls = new Set(localBeats.map((beat) => beat.fileUrl));
 
@@ -123,6 +192,43 @@ export async function selectPreparedRapBeatForBattle(seed: string) {
       mimeType: "audio/mpeg",
     }
   );
+}
+
+async function loadDatabaseSoundLibrary(client: SoundPackClient) {
+  const rows = await client.soundPackSound.findMany({
+    where: {
+      soundPack: {
+        isActive: true,
+      },
+    },
+    select: {
+      id: true,
+      fileUrl: true,
+      name: true,
+      fileType: true,
+      sizeBytes: true,
+    },
+    orderBy: {
+      fileUrl: "asc",
+    },
+  });
+
+  return rows
+    .filter((sound) =>
+      shouldRequireRemoteAudioUrl()
+        ? isPublicR2Url(sound.fileUrl) && !isLocalAudioUrl(sound.fileUrl)
+        : true,
+    )
+    .map((sound) => ({
+      id: sound.id,
+      originalFileName: sound.name,
+      fileName: sound.name,
+      fileUrl: sound.fileUrl,
+      category: (sound.fileType ?? "UNKNOWN") as SoundLibraryCategory,
+      source: "DB_LIBRARY" as const,
+      sizeBytes: sound.sizeBytes ?? 0,
+      mimeType: "audio/mpeg",
+    }));
 }
 
 export function queueRapBeatAnalysis(rapBeatId: string) {
@@ -222,12 +328,32 @@ export async function ensureGeneratedBattlePack(
     return existingPack.id;
   }
 
+  const databaseSounds = shouldRequireRemoteAudioUrl()
+    ? await loadDatabaseSoundLibrary(client)
+    : [];
   const generatedPack = generateBattlePack({
     modeId,
     seed: seed ?? `${battleId}:${modeId}`,
+    librarySounds: shouldRequireRemoteAudioUrl() ? databaseSounds : undefined,
   });
+
+  if (generatedPack.sounds.length === 0) {
+    console.warn("Generated battle pack has 0 sounds.", {
+      battleId,
+      modeId,
+      storageProvider: process.env.STORAGE_PROVIDER,
+      remoteAudioRequired: shouldRequireRemoteAudioUrl(),
+      databaseSoundCount: databaseSounds.length,
+    });
+
+    if (shouldRequireRemoteAudioUrl()) {
+      return null;
+    }
+  }
+
   for (const sound of generatedPack.sounds) {
     warnIfR2UsesLocalDemoAudio(sound.fileUrl, "generated-battle-pack");
+    requireRemoteAudioUrlInProduction(sound.fileUrl, "generated-battle-pack");
   }
 
   const createdPack = await client.generatedBattlePack.create({
@@ -295,14 +421,26 @@ export async function ensureRapBeatForBattle(
     existingBattle.rapBeat?.fileUrl
   ) {
     warnIfR2UsesLocalDemoAudio(existingBattle.rapBeat.fileUrl, "existing-rap-beat");
-    return existingBattle.rapBeatId;
+    if (
+      shouldRequireRemoteAudioUrl() &&
+      !requireRemoteAudioUrlInProduction(existingBattle.rapBeat.fileUrl, "existing-rap-beat")
+    ) {
+      console.warn("Ignoring local RapBeat on remote/R2 deployment.", {
+        battleId,
+        rapBeatId: existingBattle.rapBeatId,
+      });
+    } else {
+      return existingBattle.rapBeatId;
+    }
   }
 
   const beat = selectedBeat ?? (allowFilesystemScan ? selectRapBeatForSeed(seed) : null);
 
   if (!beat) {
     console.warn(
-      `No rap beats found in public/demo-audio/Global Library/Beat for battle ${battleId}.`,
+      shouldRequireRemoteAudioUrl()
+        ? `No R2 rap beats found for battle ${battleId}. Run pnpm r2:import-library.`
+        : `No rap beats found in public/demo-audio/Global Library/Beat for battle ${battleId}.`,
     );
     return null;
   }

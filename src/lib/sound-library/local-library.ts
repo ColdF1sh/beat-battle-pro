@@ -3,6 +3,7 @@ import path from "node:path";
 
 import type { SoundLibraryCategory } from "@/lib/sound-library/categories";
 import { detectSoundCategory } from "@/lib/sound-library/categories";
+import { isLocalAudioUrl, requireRemoteAudioUrlInProduction } from "@/lib/audio-url";
 import {
   getAudioMimeType,
   validateSoundFile,
@@ -14,7 +15,7 @@ export type GlobalLocalSound = {
   fileName: string;
   fileUrl: string;
   category: SoundLibraryCategory;
-  source: "GLOBAL_LOCAL";
+  source: "GLOBAL_LOCAL" | "R2_LIBRARY" | "DB_LIBRARY";
   sizeBytes: number;
   mimeType: string;
 };
@@ -59,20 +60,16 @@ function isRemoteLikeEnvironment() {
 }
 
 export function warnIfR2UsesLocalDemoAudio(fileUrl: string, context: string) {
-  if (
-    process.env.STORAGE_PROVIDER !== "r2" ||
-    !fileUrl.startsWith("/demo-audio/") ||
-    !isRemoteLikeEnvironment() ||
-    warnedRemoteLocalUrls.has(`${context}:${fileUrl}`)
-  ) {
+  if (!isLocalAudioUrl(fileUrl) || !isRemoteLikeEnvironment()) {
+    return;
+  }
+
+  if (warnedRemoteLocalUrls.has(`${context}:${fileUrl}`)) {
     return;
   }
 
   warnedRemoteLocalUrls.add(`${context}:${fileUrl}`);
-  console.warn("R2 storage is active but battle audio uses a local demo URL.", {
-    context,
-    fileUrl,
-  });
+  requireRemoteAudioUrlInProduction(fileUrl, context);
 }
 
 export function getGlobalLibraryPath() {

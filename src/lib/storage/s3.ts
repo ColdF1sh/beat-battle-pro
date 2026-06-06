@@ -1,5 +1,6 @@
 import {
   HeadBucketCommand,
+  ListObjectsV2Command,
   PutObjectCommand,
   S3Client,
 } from "@aws-sdk/client-s3";
@@ -177,7 +178,43 @@ function sanitizeFileName(fileName: string) {
 export function getStoragePublicUrl(objectKey: string) {
   const { publicUrl } = getStorageConfig();
 
-  return `${publicUrl}/${objectKey}`;
+  return `${publicUrl}/${encodeURI(objectKey)}`;
+}
+
+export async function listStorageObjects(prefix: string) {
+  const { bucketName } = getStorageConfig();
+  const objects: Array<{
+    key: string;
+    sizeBytes: number;
+    lastModified: Date | null;
+  }> = [];
+  let continuationToken: string | undefined;
+
+  do {
+    const response = await s3Client.send(
+      new ListObjectsV2Command({
+        Bucket: bucketName,
+        Prefix: prefix,
+        ContinuationToken: continuationToken,
+      }),
+    );
+
+    for (const object of response.Contents ?? []) {
+      if (!object.Key || object.Key.endsWith("/")) {
+        continue;
+      }
+
+      objects.push({
+        key: object.Key,
+        sizeBytes: object.Size ?? 0,
+        lastModified: object.LastModified ?? null,
+      });
+    }
+
+    continuationToken = response.NextContinuationToken;
+  } while (continuationToken);
+
+  return objects;
 }
 
 export async function uploadStorageObject({

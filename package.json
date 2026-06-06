@@ -11,6 +11,8 @@
     "db:cleanup:dev-fake": "tsx scripts/cleanup-dev-fake-players.ts",
     "storage:test:minio": "tsx scripts/test-minio-upload.ts",
     "r2:test": "tsx scripts/test-r2-storage.ts",
+    "r2:import-library": "tsx scripts/import-r2-library.ts",
+    "db:cleanup-local-urls": "tsx scripts/cleanup-local-urls.ts",
     "lint": "eslint",
     "test:unit": "vitest run",
     "test:unit:watch": "vitest",

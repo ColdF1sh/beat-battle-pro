@@ -1,8 +1,10 @@
 import { randomUUID } from "crypto";
-import { mkdir, writeFile } from "fs/promises";
-import path from "path";
 import { NextResponse } from "next/server";
 
+import {
+  StorageNotConfiguredError,
+  uploadStorageObject,
+} from "@/lib/storage/s3";
 import {
   ApiAccessError,
   jsonAccessError,
@@ -41,20 +43,13 @@ export async function POST(request: Request) {
       return jsonError("Avatar must be 5MB or smaller.", 400);
     }
 
-    const uploadsDirectory = path.join(
-      process.cwd(),
-      "public",
-      "uploads",
-      "avatars",
-    );
-    await mkdir(uploadsDirectory, { recursive: true });
-
     const fileName = `${user.id}-${randomUUID()}${extension}`;
-    const filePath = path.join(uploadsDirectory, fileName);
     const buffer = Buffer.from(await file.arrayBuffer());
-    await writeFile(filePath, buffer);
-
-    const avatarUrl = `/uploads/avatars/${fileName}`;
+    const { fileUrl: avatarUrl } = await uploadStorageObject({
+      objectKey: `avatars/${user.id}/${fileName}`,
+      mimeType: file.type,
+      buffer,
+    });
 
     await prisma.user.update({
       where: {
@@ -72,6 +67,10 @@ export async function POST(request: Request) {
   } catch (error) {
     if (error instanceof ApiAccessError) {
       return jsonAccessError(error);
+    }
+
+    if (error instanceof StorageNotConfiguredError) {
+      return jsonError("Storage is not configured.", 500);
     }
 
     console.error("Avatar upload failed", error);
