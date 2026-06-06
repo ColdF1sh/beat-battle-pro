@@ -1,6 +1,7 @@
 import { BattleStatus } from "@prisma/client";
 
 import { analyzeAndCacheBattleSubmission } from "@/lib/audio-analysis";
+import { isBattleDevToolsEnabled } from "@/lib/battle/dev-tools";
 import { prisma } from "@/lib/prisma";
 import { modeRequiresDrafting } from "@/lib/battle/drafting/engine";
 import {
@@ -138,10 +139,7 @@ export function getReadyCheckDeadline(now = new Date()) {
 }
 
 function isDevFakePlayerEnabled() {
-  return (
-    process.env.NODE_ENV !== "production" &&
-    process.env.ENABLE_DEV_FAKE_PLAYERS === "true"
-  );
+  return isBattleDevToolsEnabled();
 }
 
 function pickDevFakeSubmissionSound(index: number) {

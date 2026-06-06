@@ -9,6 +9,10 @@ import {
   requireCurrentUser,
 } from "@/lib/api/access-control";
 import { validateJsonBody } from "@/lib/api/validation";
+import {
+  getBattleDevToolsDisabledMessage,
+  isBattleDevToolsEnabled,
+} from "@/lib/battle/dev-tools";
 import { activeBattleModes } from "@/lib/battle/modes";
 import type { BattleMode } from "@/lib/battle/modes";
 import {
@@ -39,10 +43,7 @@ const fakeMatchmakingSchema = z.object({
 });
 
 function isDevFakePlayersEnabled() {
-  return (
-    process.env.NODE_ENV !== "production" &&
-    process.env.ENABLE_DEV_FAKE_PLAYERS === "true"
-  );
+  return isBattleDevToolsEnabled();
 }
 
 function jsonError(message: string, status: number) {
@@ -79,7 +80,7 @@ async function getFakeUsers() {
 export async function POST(request: Request) {
   if (!isDevFakePlayersEnabled()) {
     return jsonError(
-      "Dev fake players are disabled. Set ENABLE_DEV_FAKE_PLAYERS=true and restart dev server.",
+      getBattleDevToolsDisabledMessage("Dev fake players"),
       403,
     );
   }

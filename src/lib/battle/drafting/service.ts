@@ -6,6 +6,7 @@ import {
   draftCategoryIds,
   getDraftCategory,
 } from "@/lib/battle/drafting/config";
+import { isBattleDevToolsEnabled } from "@/lib/battle/dev-tools";
 import {
   buildDraftSnapshot,
   getCurrentDraftTurn,
@@ -189,8 +190,7 @@ function pickRandomAvailableOptions(categoryId: string, bans: DraftBan[], count:
 
 function isFakeDraftParticipant(participant: DraftParticipant | null) {
   return (
-    process.env.NODE_ENV !== "production" &&
-    process.env.ENABLE_DEV_FAKE_PLAYERS === "true" &&
+    isBattleDevToolsEnabled() &&
     Boolean(participant?.username.startsWith(fakeUserPrefix))
   );
 }

@@ -24,6 +24,7 @@ export const env = createEnv({
     R2_REGION: optionalString,
     ENABLE_LOCAL_DEMO_AUDIO: z.enum(["true", "false"]).optional(),
     ENABLE_DEV_FAKE_PLAYERS: z.enum(["true", "false"]).optional(),
+    ENABLE_BATTLE_DEV_TOOLS: z.enum(["true", "false"]).optional(),
   },
   client: {},
   runtimeEnv: {
@@ -45,6 +46,7 @@ export const env = createEnv({
     R2_REGION: process.env.R2_REGION,
     ENABLE_LOCAL_DEMO_AUDIO: process.env.ENABLE_LOCAL_DEMO_AUDIO,
     ENABLE_DEV_FAKE_PLAYERS: process.env.ENABLE_DEV_FAKE_PLAYERS,
+    ENABLE_BATTLE_DEV_TOOLS: process.env.ENABLE_BATTLE_DEV_TOOLS,
   },
   emptyStringAsUndefined: true,
 });

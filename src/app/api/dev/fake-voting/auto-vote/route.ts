@@ -9,6 +9,10 @@ import {
   requireCurrentUser,
 } from "@/lib/api/access-control";
 import { validateJsonBody } from "@/lib/api/validation";
+import {
+  getBattleDevToolsDisabledMessage,
+  isBattleDevToolsEnabled,
+} from "@/lib/battle/dev-tools";
 import { maybeFinishBattle } from "@/lib/battle/transitions";
 import { prisma } from "@/lib/prisma";
 
@@ -19,10 +23,7 @@ const autoVoteSchema = z.object({
 });
 
 function isEnabled() {
-  return (
-    process.env.NODE_ENV !== "production" &&
-    process.env.ENABLE_DEV_FAKE_PLAYERS === "true"
-  );
+  return isBattleDevToolsEnabled();
 }
 
 function jsonError(message: string, status: number) {
@@ -45,7 +46,7 @@ export async function POST(request: Request) {
   const startedAt = Date.now();
   if (!isEnabled()) {
     return jsonError(
-      "Dev fake players are disabled. Set ENABLE_DEV_FAKE_PLAYERS=true and restart dev server.",
+      getBattleDevToolsDisabledMessage("Dev fake voting"),
       403,
     );
   }

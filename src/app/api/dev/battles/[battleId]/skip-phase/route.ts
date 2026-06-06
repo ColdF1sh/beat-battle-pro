@@ -7,6 +7,10 @@ import {
   jsonAccessError,
   requireCurrentUser,
 } from "@/lib/api/access-control";
+import {
+  getBattleDevToolsDisabledMessage,
+  isBattleDevToolsEnabled,
+} from "@/lib/battle/dev-tools";
 import { modeRequiresDrafting } from "@/lib/battle/drafting/engine";
 import {
   finishBattle,
@@ -21,10 +25,7 @@ import { prisma } from "@/lib/prisma";
 import { battleParamsSchema } from "@/lib/validations/battle";
 
 function isEnabled() {
-  return (
-    process.env.NODE_ENV !== "production" &&
-    process.env.ENABLE_DEV_FAKE_PLAYERS === "true"
-  );
+  return isBattleDevToolsEnabled();
 }
 
 function jsonError(message: string, status: number) {
@@ -37,7 +38,7 @@ export async function POST(
 ) {
   if (!isEnabled()) {
     return jsonError(
-      "Dev phase skipping is disabled. Set ENABLE_DEV_FAKE_PLAYERS=true and restart dev server.",
+      getBattleDevToolsDisabledMessage("Dev phase skipping"),
       403,
     );
   }

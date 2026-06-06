@@ -32,6 +32,7 @@ import { VotingPanel } from "@/components/battle/voting-panel";
 import { ProducerHoverCard } from "@/components/profile/producer-hover-card";
 import { Button } from "@/components/ui/button";
 import { getCurrentUser } from "@/lib/auth";
+import { isBattleDevToolsEnabled } from "@/lib/battle/dev-tools";
 import { getBattleDraftState } from "@/lib/battle/drafting/service";
 import { modeRequiresDrafting } from "@/lib/battle/drafting/engine";
 import { battleModes } from "@/lib/battle/modes";
@@ -675,9 +676,7 @@ export default async function BattleRoomPage({ params }: BattleRoomPageProps) {
     ).includes(battle.status);
   const shouldShowRapBeat =
     isRapBattle && battle.status === BattleStatus.ACTIVE;
-  const enableDevFakePlayers =
-    process.env.NODE_ENV !== "production" &&
-    process.env.ENABLE_DEV_FAKE_PLAYERS === "true";
+  const enableDevFakePlayers = isBattleDevToolsEnabled();
   const hasFakePlayers = battle.participants.some((participant) =>
     participant.user.username.startsWith("dev_fake_player_"),
   );

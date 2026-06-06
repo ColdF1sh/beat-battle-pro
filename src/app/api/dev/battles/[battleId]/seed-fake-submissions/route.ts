@@ -7,6 +7,10 @@ import {
   jsonAccessError,
   requireCurrentUser,
 } from "@/lib/api/access-control";
+import {
+  getBattleDevToolsDisabledMessage,
+  isBattleDevToolsEnabled,
+} from "@/lib/battle/dev-tools";
 import { maybeMoveBattleToVoting } from "@/lib/battle/transitions";
 import { prisma } from "@/lib/prisma";
 import { battleParamsSchema } from "@/lib/validations/battle";
@@ -20,10 +24,7 @@ const demoFiles = [
 ];
 
 function isEnabled() {
-  return (
-    process.env.NODE_ENV !== "production" &&
-    process.env.ENABLE_DEV_FAKE_PLAYERS === "true"
-  );
+  return isBattleDevToolsEnabled();
 }
 
 export async function POST(
@@ -33,8 +34,7 @@ export async function POST(
   if (!isEnabled()) {
     return NextResponse.json(
       {
-        error:
-          "Dev fake players are disabled. Set ENABLE_DEV_FAKE_PLAYERS=true and restart dev server.",
+        error: getBattleDevToolsDisabledMessage("Dev fake submissions"),
       },
       { status: 403 },
     );
