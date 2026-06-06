@@ -38,6 +38,20 @@ function isRapMode(mode: string) {
   return mode.startsWith("rap_");
 }
 
+export function isActiveBattleParticipantEligible(participant: {
+  presenceStatus: BattleParticipantPresence;
+  forfeited: boolean;
+  leftAt: Date | null;
+  leavePenaltyAppliedAt: Date | null;
+}) {
+  return (
+    participant.presenceStatus !== BattleParticipantPresence.ABANDONED &&
+    !participant.forfeited &&
+    participant.leftAt === null &&
+    participant.leavePenaltyAppliedAt === null
+  );
+}
+
 export function getAbandonPenaltyForStatus(status: BattleStatus) {
   return finishedStatuses.has(status) ? 0 : ABANDON_ELO_PENALTY;
 }
@@ -124,34 +138,93 @@ async function applyPenaltyInTransaction({
     });
 
     if (user) {
+      const participantCount = await tx.battleParticipant.count({
+        where: {
+          battleId: battle.id,
+        },
+      });
+      const placement = Math.max(1, participantCount);
+
       if (isRapMode(battle.mode)) {
         if (user.rapElo !== null) {
-          await tx.user.update({
-            where: {
-              id: userId,
-            },
-            data: {
-              rapElo: Math.max(0, user.rapElo - penalty),
-              rapGames: {
-                increment: 1,
-              },
-            },
-          });
-        }
-      } else {
-        if (user.producerElo !== null) {
-          const nextProducerElo = Math.max(0, user.producerElo - penalty);
+          const oldElo = user.rapElo;
+          const newElo = Math.max(0, oldElo - penalty);
 
           await tx.user.update({
             where: {
               id: userId,
             },
             data: {
-              producerElo: nextProducerElo,
-              eloRating: nextProducerElo,
+              rapElo: newElo,
+              rapGames: {
+                increment: 1,
+              },
+            },
+          });
+          await tx.battleEloResult.upsert({
+            where: {
+              battleId_userId: {
+                battleId: battle.id,
+                userId,
+              },
+            },
+            update: {
+              oldElo,
+              newElo,
+              eloChange: newElo - oldElo,
+              placement,
+              totalVotePoints: 0,
+            },
+            create: {
+              battleId: battle.id,
+              userId,
+              oldElo,
+              newElo,
+              eloChange: newElo - oldElo,
+              placement,
+              totalVotePoints: 0,
+            },
+          });
+        }
+      } else {
+        if (user.producerElo !== null) {
+          const oldElo = user.producerElo;
+          const newElo = Math.max(0, oldElo - penalty);
+
+          await tx.user.update({
+            where: {
+              id: userId,
+            },
+            data: {
+              producerElo: newElo,
+              eloRating: newElo,
               producerGames: {
                 increment: 1,
               },
+            },
+          });
+          await tx.battleEloResult.upsert({
+            where: {
+              battleId_userId: {
+                battleId: battle.id,
+                userId,
+              },
+            },
+            update: {
+              oldElo,
+              newElo,
+              eloChange: newElo - oldElo,
+              placement,
+              totalVotePoints: 0,
+            },
+            create: {
+              battleId: battle.id,
+              userId,
+              oldElo,
+              newElo,
+              eloChange: newElo - oldElo,
+              placement,
+              totalVotePoints: 0,
             },
           });
         }

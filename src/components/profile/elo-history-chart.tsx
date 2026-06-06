@@ -13,12 +13,34 @@ import {
 type EloHistoryPoint = {
   label: string;
   elo: number;
+  createdAt: string;
+  modeName: string;
+  result: string;
+  placement: number;
+  eloChange: number;
 };
 
 type EloHistoryChartProps = {
   data: EloHistoryPoint[];
   emptyMessage?: string;
 };
+
+function formatTooltipDate(value: string) {
+  return new Intl.DateTimeFormat("en", {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(value));
+}
+
+function getPlacementLabel(placement: number) {
+  if (placement === 1) return "1st";
+  if (placement === 2) return "2nd";
+  if (placement === 3) return "3rd";
+
+  return `${placement}th`;
+}
 
 export function EloHistoryChart({
   data,
@@ -51,6 +73,29 @@ export function EloHistoryChart({
           />
           <Tooltip
             cursor={{ stroke: "rgba(192,132,252,0.35)" }}
+            content={({ active, payload }) => {
+              const point = payload?.[0]?.payload as EloHistoryPoint | undefined;
+
+              if (!active || !point) {
+                return null;
+              }
+
+              return (
+                <div className="rounded-lg border border-fuchsia-300/25 bg-zinc-950/95 p-3 text-xs text-zinc-200 shadow-2xl shadow-black/50">
+                  <p className="font-black uppercase tracking-[0.14em] text-violet-100">
+                    {point.label} · {formatTooltipDate(point.createdAt)}
+                  </p>
+                  <p className="mt-2 font-semibold text-white">{point.modeName}</p>
+                  <p className="mt-1 text-zinc-300">
+                    {point.result} · {getPlacementLabel(point.placement)}
+                  </p>
+                  <p className="mt-2 font-black text-white">
+                    {point.eloChange >= 0 ? "+" : ""}
+                    {point.eloChange} Elo · New {point.elo}
+                  </p>
+                </div>
+              );
+            }}
             contentStyle={{
               background: "rgba(9,9,11,0.96)",
               border: "1px solid rgba(217,70,239,0.24)",

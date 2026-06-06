@@ -8,6 +8,11 @@ import { cn } from "@/lib/utils";
 type EloHistoryPoint = {
   label: string;
   elo: number;
+  createdAt: string;
+  modeName: string;
+  result: string;
+  placement: number;
+  eloChange: number;
 };
 
 type EloTrajectoryPanelProps = {

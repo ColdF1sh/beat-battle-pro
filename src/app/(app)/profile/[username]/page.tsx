@@ -37,6 +37,26 @@ function getInitials(username: string) {
   return username.slice(0, 2).toUpperCase();
 }
 
+function getPlacementLabel(placement: number) {
+  if (placement === 1) return "1st";
+  if (placement === 2) return "2nd";
+  if (placement === 3) return "3rd";
+
+  return `${placement}th`;
+}
+
+function getResultLabel(result: {
+  placement: number;
+  eloChange: number;
+  totalVotePoints: number;
+}) {
+  if (result.eloChange < 0 && result.totalVotePoints === 0) {
+    return "Abandoned";
+  }
+
+  return result.placement <= 2 ? "Win" : "Loss";
+}
+
 function StatCard({
   label,
   value,
@@ -182,15 +202,38 @@ export default async function PublicProfilePage({
 
       return mode?.category === "rap";
     });
-  const producerEloHistoryChartData = producerResults
-    .map((result, index) => ({
+  const producerEloHistoryChartData = producerResults.map((result, index) => {
+    const modeName =
+      battleModes.find((mode) => mode.id === result.battle.mode)?.name ??
+      result.battle.mode;
+
+    return {
       label: `B${index + 1}`,
       elo: result.newElo,
-    }));
-  const rapEloHistoryChartData = rapResults.map((result, index) => ({
-    label: `B${index + 1}`,
-    elo: result.newElo,
-  }));
+      createdAt: result.createdAt.toISOString(),
+      modeName,
+      result: getResultLabel(result),
+      placement: result.placement,
+      eloChange: result.eloChange,
+      tooltipLabel: `${formatDate(result.createdAt)} · ${modeName} · ${getPlacementLabel(result.placement)}`,
+    };
+  });
+  const rapEloHistoryChartData = rapResults.map((result, index) => {
+    const modeName =
+      battleModes.find((mode) => mode.id === result.battle.mode)?.name ??
+      result.battle.mode;
+
+    return {
+      label: `B${index + 1}`,
+      elo: result.newElo,
+      createdAt: result.createdAt.toISOString(),
+      modeName,
+      result: getResultLabel(result),
+      placement: result.placement,
+      eloChange: result.eloChange,
+      tooltipLabel: `${formatDate(result.createdAt)} · ${modeName} · ${getPlacementLabel(result.placement)}`,
+    };
+  });
 
   return (
     <section className="space-y-5" data-testid="public-profile-page">

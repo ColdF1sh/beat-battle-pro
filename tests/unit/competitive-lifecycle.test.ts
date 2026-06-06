@@ -1,9 +1,10 @@
-import { BattleStatus } from "@prisma/client";
+import { BattleParticipantPresence, BattleStatus } from "@prisma/client";
 import { describe, expect, it } from "vitest";
 
 import {
   getAbandonPenaltyForStatus,
   getReconnectExpiresAt,
+  isActiveBattleParticipantEligible,
   MATCH_RECONNECT_GRACE_SECONDS,
 } from "@/lib/battle/competitive-lifecycle";
 
@@ -26,5 +27,48 @@ describe("competitive match lifecycle", () => {
     expect(deadline.getTime() - now.getTime()).toBe(
       MATCH_RECONNECT_GRACE_SECONDS * 1000,
     );
+  });
+
+  it("excludes explicitly left participants from active battle lookup", () => {
+    expect(
+      isActiveBattleParticipantEligible({
+        presenceStatus: BattleParticipantPresence.CONNECTED,
+        forfeited: false,
+        leftAt: null,
+        leavePenaltyAppliedAt: null,
+      }),
+    ).toBe(true);
+    expect(
+      isActiveBattleParticipantEligible({
+        presenceStatus: BattleParticipantPresence.ABANDONED,
+        forfeited: false,
+        leftAt: null,
+        leavePenaltyAppliedAt: null,
+      }),
+    ).toBe(false);
+    expect(
+      isActiveBattleParticipantEligible({
+        presenceStatus: BattleParticipantPresence.CONNECTED,
+        forfeited: true,
+        leftAt: null,
+        leavePenaltyAppliedAt: null,
+      }),
+    ).toBe(false);
+    expect(
+      isActiveBattleParticipantEligible({
+        presenceStatus: BattleParticipantPresence.CONNECTED,
+        forfeited: false,
+        leftAt: new Date("2026-06-06T00:00:00.000Z"),
+        leavePenaltyAppliedAt: null,
+      }),
+    ).toBe(false);
+    expect(
+      isActiveBattleParticipantEligible({
+        presenceStatus: BattleParticipantPresence.CONNECTED,
+        forfeited: false,
+        leftAt: null,
+        leavePenaltyAppliedAt: new Date("2026-06-06T00:00:00.000Z"),
+      }),
+    ).toBe(false);
   });
 });

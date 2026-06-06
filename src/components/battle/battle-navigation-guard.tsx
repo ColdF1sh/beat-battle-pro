@@ -125,8 +125,8 @@ export function BattleNavigationGuard({
   const estimatedPenalty = status === "FINISHED" || status === "CANCELLED" ? 0 : 30;
   const penaltyLabel =
     relevantElo === null
-      ? `No ${isRapBattle ? "Rap" : "Producer"} ELO penalty while unqualified`
-      : `-${estimatedPenalty} ${isRapBattle ? "Rap" : "Producer"} Elo`;
+      ? "No Elo penalty while unqualified"
+      : `-${estimatedPenalty} Elo`;
 
   async function abandonBattle() {
     setIsLeaving(true);

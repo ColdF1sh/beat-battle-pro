@@ -126,9 +126,7 @@ export function ActiveMatchGate({ enabled }: { enabled: boolean }) {
     return null;
   }
 
-  const abandonPenaltyLabel = `-30 ${
-    activeBattle.mode?.startsWith("rap_") ? "Rap" : "Producer"
-  } ELO`;
+  const abandonPenaltyLabel = "-30 Elo";
 
   async function reconnect() {
     if (!activeBattle || isLoading) {
