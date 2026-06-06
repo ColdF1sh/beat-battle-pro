@@ -19,9 +19,14 @@ function shouldAnalyzeNewOnly() {
   return process.argv.includes("--new");
 }
 
+function shouldForceFull() {
+  return process.argv.includes("--full");
+}
+
 async function main() {
   const force = shouldForce();
   const newOnly = shouldAnalyzeNewOnly();
+  const full = shouldForceFull();
   const defaultConcurrency = process.platform === "win32" ? 1 : 2;
   const concurrency = Math.max(
     1,
@@ -133,7 +138,9 @@ async function main() {
       );
 
       try {
-        const result = await analyzeAndCacheRapBeat(prisma, item.rapBeatId);
+        const result = await analyzeAndCacheRapBeat(prisma, item.rapBeatId, {
+          mode: full ? "full" : "staged",
+        });
         summary.analyzed += 1;
         if (result?.bpm !== null && result?.bpm !== undefined) {
           summary.withBpm += 1;
@@ -161,6 +168,8 @@ async function main() {
             key: result?.key ?? null,
             mode: result?.mode ?? null,
             source: result?.source ?? null,
+            stage: result?.analysisStage ?? null,
+            timings: result?.timings ?? null,
           }),
         );
       } catch (error) {

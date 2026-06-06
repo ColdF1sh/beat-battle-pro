@@ -1,0 +1,524 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Get a free hosted Postgres database in seconds: `npx create-db`
+
+generator client {
+  provider   = "prisma-client-js"
+  engineType = "library"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum BattleStatus {
+  WAITING
+  READY
+  DRAFTING
+  ACTIVE
+  SUBMISSION
+  VOTING
+  FINISHED
+  CANCELLED
+}
+
+enum ProductType {
+  DRUM_PACK
+  LOOP_PACK
+  PLUGIN
+  SAMPLE_PACK
+  OTHER
+}
+
+enum MatchmakingQueueStatus {
+  SEARCHING
+  MATCHED
+  CANCELLED
+}
+
+enum BattleParticipantPresence {
+  CONNECTED
+  DISCONNECTED
+  RECONNECTED
+  ABANDONED
+}
+
+model User {
+  id            String   @id @default(cuid())
+  email         String   @unique
+  username      String   @unique
+  passwordHash  String
+  displayName   String?
+  avatarUrl     String?
+  bio           String?
+  eloRating     Int      @default(1000)
+  wins          Int      @default(0)
+  losses        Int      @default(0)
+  producerElo   Int?
+  producerWins  Int      @default(0)
+  producerGames Int      @default(0)
+  rapElo        Int?
+  rapWins       Int      @default(0)
+  rapGames      Int      @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  battlesCreated    Battle[]                  @relation("BattleCreator")
+  participations    BattleParticipant[]
+  votes             Vote[]                    @relation("VoteVoter")
+  posts             CommunityPost[]
+  comments          Comment[]
+  followers         Follow[]                  @relation("Following")
+  following         Follow[]                  @relation("Follower")
+  sentMessages      DirectMessage[]           @relation("MessageSender")
+  receivedMessages  DirectMessage[]           @relation("MessageReceiver")
+  matchmakingQueue  MatchmakingQueue[]
+  submissions       BattleSubmission[]
+  eloResults        BattleEloResult[]
+  draftBans         BattleDraftBan[]
+  readyChecks       BattleReadyCheck[]
+  battleMessages    BattleMessage[]
+  listeningProgress BattleListeningProgress[]
+}
+
+model Battle {
+  id                  String       @id @default(cuid())
+  title               String
+  mode                String
+  source              String?
+  status              BattleStatus @default(WAITING)
+  isPrivate           Boolean      @default(false)
+  inviteCode          String?      @unique
+  maxPlayers          Int          @default(2)
+  durationMinutes     Int          @default(20)
+  readyStartedAt      DateTime?
+  readyEndsAt         DateTime?
+  startedAt           DateTime?
+  endsAt              DateTime?
+  submissionStartedAt DateTime?
+  submissionEndsAt    DateTime?
+  votingStartedAt     DateTime?
+  votingEndsAt        DateTime?
+  createdAt           DateTime     @default(now())
+  updatedAt           DateTime     @updatedAt
+  createdById         String
+  winnerId            String?
+  finishedAt          DateTime?
+  eloProcessed        Boolean      @default(false)
+  soundPackId         String?
+  rapBeatId           String?
+
+  createdBy         User                      @relation("BattleCreator", fields: [createdById], references: [id], onDelete: Cascade)
+  participants      BattleParticipant[]
+  soundPack         SoundPack?                @relation(fields: [soundPackId], references: [id])
+  rapBeat           RapBeat?                  @relation(fields: [rapBeatId], references: [id])
+  submissions       BattleSubmission[]
+  votes             Vote[]
+  eloResults        BattleEloResult[]
+  draft             BattleDraft?
+  draftBans         BattleDraftBan[]
+  readyChecks       BattleReadyCheck[]
+  messages          BattleMessage[]
+  listeningProgress BattleListeningProgress[]
+  generatedPack     GeneratedBattlePack?
+
+  @@index([createdById])
+  @@index([soundPackId])
+  @@index([rapBeatId])
+  @@index([source])
+  @@index([status])
+  @@index([mode])
+}
+
+model BattleParticipant {
+  id               String    @id @default(cuid())
+  battleId         String
+  userId           String
+  beatUrl          String?
+  joinedAt         DateTime  @default(now())
+  submittedAt      DateTime?
+  score            Int       @default(0)
+  leftAt           DateTime?
+  forfeited        Boolean   @default(false)
+  missedSubmission Boolean   @default(false)
+  technicalLoss    Boolean   @default(false)
+  presenceStatus   BattleParticipantPresence @default(CONNECTED)
+  lastSeenAt       DateTime?
+  connectedAt      DateTime?
+  disconnectedAt   DateTime?
+  reconnectedAt    DateTime?
+  abandonedAt      DateTime?
+  abandonReason    String?
+  leavePenaltyAppliedAt DateTime?
+  leavePenaltyElo       Int?
+  reconnectExpiresAt    DateTime?
+
+  battle Battle @relation(fields: [battleId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  submission    BattleSubmission?
+  receivedVotes Vote[]            @relation("VoteParticipant")
+  draftBans     BattleDraftBan[]
+
+  @@unique([battleId, userId])
+  @@index([battleId])
+  @@index([userId])
+  @@index([presenceStatus])
+  @@index([reconnectExpiresAt])
+}
+
+model BattleReadyCheck {
+  id        String    @id @default(cuid())
+  battleId  String
+  userId    String
+  isReady   Boolean   @default(false)
+  readyAt   DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  battle Battle @relation(fields: [battleId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([battleId, userId])
+  @@index([battleId])
+  @@index([userId])
+  @@index([isReady])
+}
+
+model BattleMessage {
+  id        String   @id @default(cuid())
+  battleId  String
+  userId    String
+  content   String
+  createdAt DateTime @default(now())
+
+  battle Battle @relation(fields: [battleId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([battleId])
+  @@index([userId])
+  @@index([createdAt])
+}
+
+model BattleListeningProgress {
+  id          String    @id @default(cuid())
+  battleId    String
+  userId      String
+  completed   Boolean   @default(false)
+  completedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  battle Battle @relation(fields: [battleId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([battleId, userId])
+  @@index([battleId])
+  @@index([userId])
+  @@index([completed])
+}
+
+model GeneratedBattlePack {
+  id         String   @id @default(cuid())
+  battleId   String   @unique
+  seed       String
+  sourceType String   @default("GLOBAL_LIBRARY")
+  createdAt  DateTime @default(now())
+
+  battle Battle                     @relation(fields: [battleId], references: [id], onDelete: Cascade)
+  sounds GeneratedBattlePackSound[]
+
+  @@index([battleId])
+  @@index([sourceType])
+}
+
+model GeneratedBattlePackSound {
+  id               String  @id @default(cuid())
+  generatedPackId  String
+  fileUrl          String
+  fileName         String
+  category         String
+  source           String
+  originalFileName String
+  mimeType         String?
+  sizeBytes        Int?
+  slot             String?
+
+  generatedPack GeneratedBattlePack @relation(fields: [generatedPackId], references: [id], onDelete: Cascade)
+
+  @@index([generatedPackId])
+  @@index([category])
+}
+
+model RapBeat {
+  id                   String   @id @default(cuid())
+  fileUrl              String   @unique
+  fileName             String
+  title                String?
+  bpm                  Int?
+  key                  String?
+  detectedBpm          Float?
+  bpmConfidence        Float?
+  beatGridConfidence   Float?
+  detectedKey          String?
+  detectedMode         String?
+  keyConfidence        Float?
+  keyCertainty         String?
+  tuningCents          Float?
+  referenceAHz         Float?
+  audioHash            String?
+  analyzedAt           DateTime?
+  analysisStatus       String   @default("PENDING")
+  analysisSource       String?
+  analysisVersion      String?
+  manualBpm            Float?
+  manualKey            String?
+  manualMode           String?
+  bpmCandidatesJson    String?
+  keyCandidatesJson    String?
+  producerUsername     String?
+  producerAvatarUrl    String?
+  producerElo          Int?
+  producerWins         Int?
+  producerGames        Int?
+  averageRating        Float?
+  ratingCount          Int      @default(0)
+  isApprovedForRapPool Boolean  @default(false)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  battles Battle[]
+
+  @@index([isApprovedForRapPool])
+  @@index([averageRating])
+}
+
+model BattleDraft {
+  id                   String   @id @default(cuid())
+  battleId             String   @unique
+  currentCategory      String   @default("genre")
+  currentTurnIndex     Int      @default(0)
+  status               String   @default("ACTIVE")
+  finalGenre           String?
+  finalBpm             String?
+  finalKey             String?
+  finalDurationMinutes Int?
+  turnStartedAt        DateTime @default(now())
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  battle Battle           @relation(fields: [battleId], references: [id], onDelete: Cascade)
+  bans   BattleDraftBan[]
+
+  @@index([battleId])
+  @@index([status])
+}
+
+model BattleDraftBan {
+  id            String   @id @default(cuid())
+  draftId       String
+  battleId      String
+  category      String
+  option        String
+  participantId String
+  userId        String
+  turnIndex     Int
+  createdAt     DateTime @default(now())
+
+  draft       BattleDraft       @relation(fields: [draftId], references: [id], onDelete: Cascade)
+  battle      Battle            @relation(fields: [battleId], references: [id], onDelete: Cascade)
+  participant BattleParticipant @relation(fields: [participantId], references: [id], onDelete: Cascade)
+  user        User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([draftId, category, option])
+  @@index([battleId])
+  @@index([participantId])
+  @@index([userId])
+}
+
+model BattleEloResult {
+  id              String   @id @default(cuid())
+  battleId        String
+  userId          String
+  oldElo          Int
+  newElo          Int
+  eloChange       Int
+  placement       Int
+  totalVotePoints Int
+  createdAt       DateTime @default(now())
+
+  battle Battle @relation(fields: [battleId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([battleId, userId])
+  @@index([battleId])
+  @@index([userId])
+}
+
+model BattleSubmission {
+  id            String   @id @default(cuid())
+  battleId      String
+  userId        String
+  participantId String   @unique
+  fileUrl       String
+  fileName      String
+  mimeType      String
+  sizeBytes     Int
+  detectedBpm   Float?
+  bpmConfidence Float?
+  detectedKey   String?
+  detectedMode  String?
+  keyConfidence Float?
+  tuningCents   Float?
+  analyzedAt    DateTime?
+  rulePenalty   Float?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  battle      Battle            @relation(fields: [battleId], references: [id], onDelete: Cascade)
+  user        User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  participant BattleParticipant @relation(fields: [participantId], references: [id], onDelete: Cascade)
+
+  @@unique([battleId, participantId])
+  @@index([battleId])
+  @@index([userId])
+  @@index([createdAt])
+}
+
+model Vote {
+  id            String   @id @default(cuid())
+  battleId      String
+  voterId       String
+  participantId String
+  score         Int
+  createdAt     DateTime @default(now())
+
+  battle      Battle            @relation(fields: [battleId], references: [id], onDelete: Cascade)
+  voter       User              @relation("VoteVoter", fields: [voterId], references: [id], onDelete: Cascade)
+  participant BattleParticipant @relation("VoteParticipant", fields: [participantId], references: [id], onDelete: Cascade)
+
+  @@unique([battleId, voterId, participantId])
+  @@index([battleId])
+  @@index([voterId])
+  @@index([participantId])
+}
+
+model CommunityPost {
+  id        String   @id @default(cuid())
+  title     String
+  content   String
+  authorId  String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  author   User      @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  comments Comment[]
+
+  @@index([authorId])
+}
+
+model Comment {
+  id        String   @id @default(cuid())
+  content   String
+  authorId  String
+  postId    String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  author User          @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  post   CommunityPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  @@index([authorId])
+  @@index([postId])
+}
+
+model Follow {
+  id          String   @id @default(cuid())
+  followerId  String
+  followingId String
+  createdAt   DateTime @default(now())
+
+  follower  User @relation("Follower", fields: [followerId], references: [id], onDelete: Cascade)
+  following User @relation("Following", fields: [followingId], references: [id], onDelete: Cascade)
+
+  @@unique([followerId, followingId])
+  @@index([followerId])
+  @@index([followingId])
+}
+
+model DirectMessage {
+  id         String   @id @default(cuid())
+  senderId   String
+  receiverId String
+  content    String
+  isRead     Boolean  @default(false)
+  createdAt  DateTime @default(now())
+
+  sender   User @relation("MessageSender", fields: [senderId], references: [id], onDelete: Cascade)
+  receiver User @relation("MessageReceiver", fields: [receiverId], references: [id], onDelete: Cascade)
+
+  @@index([senderId])
+  @@index([receiverId])
+}
+
+model ShopProduct {
+  id          String      @id @default(cuid())
+  name        String
+  description String?
+  priceCents  Int
+  type        ProductType
+  imageUrl    String?
+  fileUrl     String?
+  isActive    Boolean     @default(true)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  @@index([type])
+  @@index([isActive])
+}
+
+model SoundPack {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  sounds  SoundPackSound[]
+  battles Battle[]
+
+  @@index([isActive])
+}
+
+model SoundPackSound {
+  id          String   @id @default(cuid())
+  soundPackId String
+  name        String
+  fileUrl     String
+  fileType    String?
+  sizeBytes   Int?
+  createdAt   DateTime @default(now())
+
+  soundPack SoundPack @relation(fields: [soundPackId], references: [id], onDelete: Cascade)
+
+  @@index([soundPackId])
+}
+
+model MatchmakingQueue {
+  id        String                 @id @default(cuid())
+  userId    String
+  mode      String
+  status    MatchmakingQueueStatus @default(SEARCHING)
+  createdAt DateTime               @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, mode, status])
+  @@index([userId])
+  @@index([mode])
+  @@index([status])
+  @@index([createdAt])
+}

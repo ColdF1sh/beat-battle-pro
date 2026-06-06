@@ -49,12 +49,15 @@ services:
     build:
       context: .
       dockerfile: docker/analyzer/Dockerfile
+      args:
+        ENABLE_KEYFINDER: ${ENABLE_KEYFINDER:-true}
     working_dir: /app
     profiles:
       - tools
     command: python scripts/analyzer-server.py
     environment:
-      ANALYZER_SERVICE_CONCURRENCY: "1"
+      ANALYZER_CONCURRENCY: ${ANALYZER_CONCURRENCY:-2}
+      ANALYZER_MODE: ${ANALYZER_MODE:-full}
     ports:
       - "8765:8765"
     volumes:

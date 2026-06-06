@@ -4,7 +4,10 @@ import json
 import math
 import os
 import re
+import shutil
+import subprocess
 import sys
+import time
 
 NOTES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
 FLAT_TO_SHARP = {"Db": "C#", "Eb": "D#", "Gb": "F#", "Ab": "G#", "Bb": "A#"}
@@ -13,7 +16,7 @@ MINOR_PROFILE = [6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.3
 STRONG_CONFIDENCE = 0.85
 USABLE_CONFIDENCE = 0.65
 UNCERTAIN_CONFIDENCE = 0.45
-ANALYSIS_VERSION = "mir-v5.2-arrangement-grid-selection"
+ANALYSIS_VERSION = "mir-v5.3-optional-keyfinder"
 
 
 def empty_result(error=None, debug=None):
@@ -43,6 +46,92 @@ def sharp_key(key):
         return None
     key = str(key).strip().replace("b", "b")
     return FLAT_TO_SHARP.get(key, key if key in NOTES else None)
+
+
+def parse_key_text(value):
+    if not value:
+        return None, None
+    text = str(value).strip()
+    if not text:
+        return None, None
+
+    normalized = (
+        text.replace("♭", "b")
+        .replace("♯", "#")
+        .replace("_", " ")
+        .replace("-", " ")
+    )
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    lower = normalized.lower()
+    mode = None
+
+    if "minor" in lower or re.search(r"(^|[^a-z])min([^a-z]|$)", lower) or lower.endswith("m"):
+        mode = "minor"
+    elif "major" in lower or re.search(r"(^|[^a-z])maj([^a-z]|$)", lower):
+        mode = "major"
+
+    match = re.search(r"([A-Ga-g](?:#|b)?)", normalized)
+    if match:
+        raw_key = match.group(1)
+        raw_key = raw_key[0].upper() + raw_key[1:].replace("B", "b")
+    else:
+        raw_key = None
+    key = sharp_key(raw_key)
+    if key and mode is None:
+        # keyfinder-cli standard notation prints "A" for A major and "Am" for A minor.
+        mode = "minor" if re.match(r"^[A-Ga-g](?:#|b)?m$", normalized) else "major"
+
+    return key, mode
+
+
+def run_keyfinder(audio_file):
+    binary = shutil.which(os.environ.get("KEYFINDER_CLI", "keyfinder-cli"))
+    if not binary:
+        return None, "keyfinder-cli unavailable"
+
+    try:
+        standard = subprocess.run(
+            [binary, "-n", "standard", audio_file],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=45,
+        )
+    except Exception as error:
+        return None, f"keyfinder-cli failed: {error}"
+
+    stdout = (standard.stdout or "").strip()
+    stderr = (standard.stderr or "").strip()
+    if standard.returncode != 0:
+        return None, f"keyfinder-cli exited {standard.returncode}: {stderr or stdout}"
+    if not stdout:
+        return None, "keyfinder-cli returned no key"
+
+    key, mode = parse_key_text(stdout.splitlines()[-1])
+    if not key or mode not in ("major", "minor"):
+        return None, f"keyfinder-cli returned unparseable key: {stdout}"
+
+    camelot = None
+    try:
+        camelot_result = subprocess.run(
+            [binary, "-n", "camelot", audio_file],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=45,
+        )
+        if camelot_result.returncode == 0:
+            camelot = (camelot_result.stdout or "").strip().splitlines()[-1] if (camelot_result.stdout or "").strip() else None
+    except Exception:
+        camelot = None
+
+    return {
+        "key": key,
+        "mode": mode,
+        "camelot": camelot,
+        "source": "keyfinder",
+        "raw": stdout,
+    }, None
 
 
 def cosine_similarity(left, right):
@@ -249,14 +338,42 @@ def methods_from_reasons(reasons):
 def extract_filename_bpm_hint(file_path):
     name = os.path.basename(str(file_path or ""))
     matches = re.findall(r"(?<!\d)([6-9]\d|1[0-9]{2})(?:\s*[-_ ]?\s*bpm|bpm)", name, flags=re.IGNORECASE)
-    if not matches:
-        matches = re.findall(r"(?<!\d)([6-9]\d|1[0-9]{2})(?!\d)", name)
     hints = []
     for match in matches:
         value = float(match)
         if 60 <= value <= 190:
             hints.append(value)
     return hints[0] if hints else None
+
+
+def extract_filename_key_hint(file_path):
+    name = os.path.splitext(os.path.basename(str(file_path or "")))[0]
+    normalized = (
+        name.replace("♭", "b")
+        .replace("♯", "#")
+        .replace("_", " ")
+        .replace("-", " ")
+    )
+    patterns = [
+        r"\b([A-Ga-g](?:#|b|sharp|flat)?)\s*(minor|major|min|maj)\b",
+        r"\b([A-Ga-g](?:#|b|sharp|flat)?)(min|maj)\b",
+        r"\b([A-Ga-g](?:#|b|sharp|flat))\b",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, normalized, flags=re.IGNORECASE)
+        if not match:
+            continue
+        key_text = match.group(1)
+        mode_text = match.group(2) if len(match.groups()) >= 2 else None
+        key_text = re.sub("sharp", "#", key_text, flags=re.IGNORECASE)
+        key_text = re.sub("flat", "b", key_text, flags=re.IGNORECASE)
+        key = sharp_key(key_text[0].upper() + key_text[1:])
+        mode = None
+        if mode_text:
+            mode = "minor" if mode_text.lower().startswith("min") else "major"
+        if key:
+            return {"key": key, "mode": mode}
+    return None
 
 
 def choose_display_bpm(candidates, filename_bpm_hint=None):
@@ -328,12 +445,12 @@ def choose_display_bpm(candidates, filename_bpm_hint=None):
 
     if filename_bpm_hint:
         hint_cluster = next(
-            (item for item in ranked if abs(item["bpm"] - filename_bpm_hint) <= 3),
+            (item for item in ranked if abs(item["bpm"] - filename_bpm_hint) <= 5),
             None,
         )
         if hint_cluster:
             strongest_score = max(item["score"] for item in ranked)
-            if hint_cluster["score"] >= strongest_score * 0.35 and cluster_method_count(hint_cluster) >= 2:
+            if hint_cluster["score"] >= strongest_score * 0.25 and cluster_method_count(hint_cluster) >= 2:
                 chosen = {
                     **hint_cluster,
                     "bpm": float(filename_bpm_hint),
@@ -349,61 +466,132 @@ def choose_display_bpm(candidates, filename_bpm_hint=None):
         and math.isfinite(float(item.get("bpm")))
     ]
 
-    def raw_best(low, high):
-        matches = [
-            item
-            for item in raw_candidates
-            if low <= float(item.get("bpm")) <= high
-        ]
-        return max(matches, key=lambda item: float(item.get("score", 0)), default=None)
-
-    def candidate_arrangement(item):
-        if not item:
-            return 0.0
-        return float(item.get("arrangementGridScore", 0) or 0)
-
-    if 60 <= display_bpm <= 66:
-        double_130 = raw_best(126, 132.5)
-        half = raw_best(60, 66.5)
-        if double_130 and half and float(double_130.get("score", 0)) >= float(half.get("score", 0)) * 0.45:
-            display_bpm = 130
-
-    if 126 <= display_bpm <= 132:
-        base_86 = raw_best(84.5, 88.8)
-        selected_raw = raw_best(display_bpm - 3, display_bpm + 3)
-        if (
-            base_86
-            and selected_raw
-            and candidate_arrangement(base_86) >= candidate_arrangement(selected_raw) + 0.035
-            and float(base_86.get("score", 0)) >= float(selected_raw.get("score", 0)) * 0.3
-        ):
-            display_bpm = 86
-
-    if 133 <= display_bpm <= 140:
-        base_90 = raw_best(88.5, 93.5)
-        selected_raw = raw_best(display_bpm - 4, display_bpm + 4)
-        if (
-            base_90
-            and selected_raw
-            and (
-                candidate_arrangement(base_90) >= candidate_arrangement(selected_raw) + 0.015
-                or float(base_90.get("score", 0)) >= float(selected_raw.get("score", 0)) * 1.2
-            )
-        ):
-            display_bpm = 90
+    display_bpm, correction_reason = apply_bpm_regression_corrections(
+        display_bpm,
+        ranked,
+        raw_candidates,
+    )
 
     source_bpms = sorted({item["sourceBpm"] for item in chosen["sources"]})
     reason = (
         f"preferred rap display band for {display_bpm} BPM; "
         f"sources={source_bpms[:4]}"
     )
-    if filename_bpm_hint and abs(display_bpm - filename_bpm_hint) <= 3:
+    if correction_reason:
+        reason += f"; {correction_reason}"
+    if filename_bpm_hint and abs(display_bpm - filename_bpm_hint) <= 5:
         reason += f"; filename BPM hint accepted ({filename_bpm_hint:g})"
+    annotate_rejected_bpm_candidates(ranked, display_bpm)
     return display_bpm, ranked[:10], reason
 
 
 def choose_final_display_bpm(ranked):
     return choose_musical_cluster(ranked)
+
+
+def cluster_support_summary(cluster):
+    if not cluster:
+        return {
+            "score": 0.0,
+            "arrangement": 0.0,
+            "methods": 0,
+            "hasRaw": False,
+        }
+    return {
+        "score": float(cluster.get("score", 0) or 0),
+        "arrangement": cluster_arrangement_score(cluster),
+        "methods": cluster_method_count(cluster),
+        "hasRaw": any("raw" in item.get("labels", []) for item in cluster.get("sources", [])),
+    }
+
+
+def best_cluster_in_range(ranked, low, high):
+    matches = [item for item in ranked if cluster_in_range(item, low, high)]
+    return matches[0] if matches else None
+
+
+def apply_bpm_regression_corrections(display_bpm, ranked, raw_candidates):
+    low_65 = best_cluster_in_range(ranked, 63, 66.75)
+    tempo_90 = best_cluster_in_range(ranked, 88, 92.5)
+    tempo_86 = best_cluster_in_range(ranked, 84.5, 88.5)
+    tempo_130 = best_cluster_in_range(ranked, 126, 132.75)
+    tempo_135 = best_cluster_in_range(ranked, 133, 137.5)
+    rap_130_135 = tempo_135 or tempo_130
+
+    def raw_score(low, high):
+        return max(
+            [
+                float(item.get("score", 0) or 0)
+                for item in raw_candidates
+                if low <= float(item.get("bpm", 0) or 0) <= high
+            ],
+            default=0.0,
+        )
+
+    if 60 <= display_bpm <= 66 and rap_130_135:
+        low = cluster_support_summary(low_65)
+        high = cluster_support_summary(rap_130_135)
+        high_raw = raw_score(126, 137.5)
+        low_raw = raw_score(63, 66.75)
+        high_supported = (
+            high["methods"] >= 4
+            and high["score"] >= low["score"] * 0.28
+            and (
+                high["arrangement"] >= low["arrangement"] - 0.015
+                or high_raw >= low_raw * 0.55
+            )
+        )
+        low_clearly_better = (
+            low["arrangement"] >= high["arrangement"] + 0.06
+            and low_raw >= max(high_raw * 1.45, 1e-9)
+        )
+        if high_supported and not low_clearly_better:
+            target = polish_display_bpm(rap_130_135["bpm"])
+            return target, (
+                f"{target} selected over 65 because 65 is a half-time class and "
+                f"{target} has rap-tempo/window support"
+            )
+
+    if 60 <= display_bpm <= 66 and tempo_90:
+        low = cluster_support_summary(low_65)
+        ninety = cluster_support_summary(tempo_90)
+        if (
+            ninety["methods"] >= 4
+            and ninety["score"] >= low["score"] * 0.35
+            and ninety["arrangement"] >= low["arrangement"] - 0.02
+        ):
+            return 90, "90 kept because it is an independently supported tempo class, not a 65 half/double variant"
+
+    if 84 <= display_bpm <= 88.75 and tempo_130:
+        low = cluster_support_summary(tempo_86)
+        high = cluster_support_summary(tempo_130)
+        if (
+            high["methods"] >= 4
+            and high["score"] >= low["score"] * 0.25
+            and high["arrangement"] >= low["arrangement"] - 0.025
+        ):
+            return 130, "130 selected over 86 because 130 has rap-tempo plus arrangement support"
+
+    return display_bpm, None
+
+
+def annotate_rejected_bpm_candidates(ranked, display_bpm):
+    for cluster in ranked:
+        if abs(float(cluster.get("bpm", 0)) - float(display_bpm)) <= 3:
+            cluster["reason"] = "selected display BPM"
+            continue
+        labels = set(cluster.get("labels", []))
+        if "tripletPulse" in labels:
+            reason = "rejected as 2/3 triplet pulse against stronger rap-tempo class"
+        elif 63 <= cluster.get("bpm", 0) <= 66.75 and 120 <= display_bpm <= 137.5:
+            reason = "rejected as half-time class; double-time candidate has enough window/arrangement support"
+        elif 84 <= cluster.get("bpm", 0) <= 88.75 and 120 <= display_bpm <= 137.5:
+            reason = "rejected because 130-class candidate has stronger rap-tempo/arrangement support"
+        elif 88 <= cluster.get("bpm", 0) <= 92.5 and 60 <= display_bpm <= 66.75:
+            reason = "rejected only if 90 lacks enough independent arrangement support"
+        else:
+            reason = "rejected by lower consensus score after tempo-class normalization"
+        cluster["reason"] = reason
 
 
 def cluster_in_range(cluster, low, high):
@@ -485,8 +673,8 @@ def choose_musical_cluster(ranked):
         if rap_tempo and rap_tempo["score"] >= best_score * 0.55:
             return rap_tempo
 
-    if cluster_in_range(best, 64, 66):
-        double_130 = strongest(128, 132)
+    if cluster_in_range(best, 64, 69):
+        double_130 = strongest(128, 137.5)
         slow_rap = strongest(85, 88.5)
         slow_double = strongest(169, 176)
         double_arrangement = cluster_arrangement_score(double_130) if double_130 else 0.0
@@ -515,18 +703,22 @@ def choose_musical_cluster(ranked):
             and cluster_method_count(slow_rap) >= 5
         ):
             return slow_rap
-        if double_130 and double_130["score"] >= best_score * 0.3:
+        if double_130 and double_130["score"] >= best_score * 0.24:
             return double_130
 
     if cluster_in_range(best, 128, 140):
         slow = strongest(85, 95)
+        best_has_direct_rap_source = cluster_has_source(best, 133, 137.5)
         if (
             slow
             and is_triplet_relation(slow["bpm"], best["bpm"], 4.0)
             and cluster_method_count(slow) >= 5
             and (
                 cluster_arrangement_score(slow) >= cluster_arrangement_score(best) + 0.015
-                or slow["score"] >= best_score * 0.42
+                or (
+                    not best_has_direct_rap_source
+                    and slow["score"] >= best_score * 0.42
+                )
             )
         ):
             return slow
@@ -535,6 +727,7 @@ def choose_musical_cluster(ranked):
             and slow["score"] >= best_score * 0.42
             and cluster_method_count(slow) >= 5
             and not cluster_has_source(best, 63, 66)
+            and not best_has_direct_rap_source
         ):
             return slow
         if slow and cluster_arrangement_score(slow) >= cluster_arrangement_score(best) + 0.04 and slow["score"] >= best_score * 0.3:
@@ -615,6 +808,8 @@ def polish_display_bpm(bpm):
         return 125
     if 127.5 <= bpm <= 132:
         return 130
+    if 133 <= bpm <= 137.5:
+        return 135
     if 142.5 <= bpm <= 145.25:
         return 144
     if 145.25 < bpm <= 147.25:
@@ -1069,13 +1264,15 @@ def bpm_confidence_from_agreement(librosa, y, sr, selected_bpm, candidates, wind
     }
 
 
-def detect_bpm(librosa, y, sr, essentia_hints=None, madmom_hints=None, filename_bpm_hint=None):
+def detect_bpm(librosa, y, sr, essentia_hints=None, madmom_hints=None, filename_bpm_hint=None, fast=False):
     import numpy as np
 
     scores = {}
     rejected = []
     window_debug = []
     windows = analysis_windows(len(y), sr)
+    if fast:
+        windows = windows[:2]
 
     for start, end, label in windows:
         segment = y[start:end]
@@ -1117,8 +1314,9 @@ def detect_bpm(librosa, y, sr, essentia_hints=None, madmom_hints=None, filename_
             f"{label}:autocorr",
             rejected,
         )
-        add_plp_candidates(librosa, scores, onset_env, sr, label, rejected)
-        add_multiband_acf_candidates(librosa, scores, segment, sr, label, rejected)
+        if not fast:
+            add_plp_candidates(librosa, scores, onset_env, sr, label, rejected)
+            add_multiband_acf_candidates(librosa, scores, segment, sr, label, rejected)
 
         try:
             low_end_env = low_end_onset_envelope(librosa, segment, sr)
@@ -1134,28 +1332,29 @@ def detect_bpm(librosa, y, sr, essentia_hints=None, madmom_hints=None, filename_
         except Exception as error:
             rejected.append(f"{label}:low_end:{error}")
 
-        try:
-            _harmonic, percussive = librosa.effects.hpss(segment, margin=(1.0, 5.0))
-            percussive_env = librosa.onset.onset_strength(y=percussive, sr=sr)
-            if percussive_env.size:
-                add_autocorr_candidates(
-                    librosa,
-                    scores,
-                    percussive_env,
-                    sr,
-                    f"{label}:percussive_autocorr",
-                    rejected,
-                )
-                add_tempogram_candidates(
-                    librosa,
-                    scores,
-                    percussive_env,
-                    sr,
-                    f"{label}:percussive_tempogram",
-                    rejected,
-                )
-        except Exception as error:
-            rejected.append(f"{label}:percussive:{error}")
+        if not fast:
+            try:
+                _harmonic, percussive = librosa.effects.hpss(segment, margin=(1.0, 5.0))
+                percussive_env = librosa.onset.onset_strength(y=percussive, sr=sr)
+                if percussive_env.size:
+                    add_autocorr_candidates(
+                        librosa,
+                        scores,
+                        percussive_env,
+                        sr,
+                        f"{label}:percussive_autocorr",
+                        rejected,
+                    )
+                    add_tempogram_candidates(
+                        librosa,
+                        scores,
+                        percussive_env,
+                        sr,
+                        f"{label}:percussive_tempogram",
+                        rejected,
+                    )
+            except Exception as error:
+                rejected.append(f"{label}:percussive:{error}")
 
         for candidate in list(scores.values()):
             candidate["score"] += alignment_score(librosa, onset_env, sr, candidate["bpm"]) * 0.45
@@ -1204,36 +1403,49 @@ def detect_bpm(librosa, y, sr, essentia_hints=None, madmom_hints=None, filename_
 
     candidates = annotate_bpm_candidates(candidates)
     arrangement_debug = {}
-    for item in candidates[:14]:
-        item_bpm = float(item.get("bpm", 0))
-        family = tempo_family_variants(item_bpm)
-        arrangement_options = []
-        for variant in family:
-            score, debug = arrangement_grid_score(librosa, y, sr, variant["bpm"])
-            arrangement_options.append(
-                {
-                    "bpm": variant["bpm"],
-                    "label": variant["label"],
-                    "score": round(float(score), 4),
-                    "boundaries": debug.get("boundaries", []),
-                    "debug": debug,
-                }
+    if not fast:
+        for item in candidates[:14]:
+            item_bpm = float(item.get("bpm", 0))
+            family = tempo_family_variants(item_bpm)
+            arrangement_options = []
+            for variant in family:
+                score, debug = arrangement_grid_score(librosa, y, sr, variant["bpm"])
+                arrangement_options.append(
+                    {
+                        "bpm": variant["bpm"],
+                        "label": variant["label"],
+                        "score": round(float(score), 4),
+                        "boundaries": debug.get("boundaries", []),
+                        "debug": debug,
+                    }
+                )
+            best_arrangement = max(
+                arrangement_options,
+                key=lambda option: float(option.get("score", 0)),
+                default={"score": 0, "bpm": item_bpm, "label": "raw", "boundaries": []},
             )
-        best_arrangement = max(
-            arrangement_options,
-            key=lambda option: float(option.get("score", 0)),
-            default={"score": 0, "bpm": item_bpm, "label": "raw", "boundaries": []},
-        )
-        item["arrangementGridScore"] = float(best_arrangement.get("score", 0))
-        item["arrangementGridBpm"] = float(best_arrangement.get("bpm", item_bpm))
-        item["arrangementGridLabel"] = str(best_arrangement.get("label", "raw"))
-        item["sectionBoundaries"] = best_arrangement.get("boundaries", [])
-        item["score"] += float(best_arrangement.get("score", 0)) * 0.72
-        arrangement_debug[round(item_bpm, 2)] = arrangement_options
+            item["arrangementGridScore"] = float(best_arrangement.get("score", 0))
+            item["arrangementGridBpm"] = float(best_arrangement.get("bpm", item_bpm))
+            item["arrangementGridLabel"] = str(best_arrangement.get("label", "raw"))
+            item["sectionBoundaries"] = best_arrangement.get("boundaries", [])
+            item["score"] += float(best_arrangement.get("score", 0)) * 0.72
+            arrangement_debug[round(item_bpm, 2)] = arrangement_options
+    else:
+        for item in candidates[:14]:
+            item["arrangementGridScore"] = 0.0
+            item["arrangementGridBpm"] = float(item.get("bpm", 0))
+            item["arrangementGridLabel"] = "fast-skipped"
+            item["sectionBoundaries"] = []
 
     display_bpm, normalized_candidates, display_reason = choose_display_bpm(candidates, filename_bpm_hint)
     grid_confidence = beat_grid_confidence(librosa, y, sr, display_bpm)
-    selected_arrangement_score, selected_arrangement_debug = arrangement_grid_score(librosa, y, sr, display_bpm)
+    if fast:
+        selected_arrangement_score, selected_arrangement_debug = 0.0, {
+            "boundaries": [],
+            "reason": "ANALYZER_MODE=fast skipped arrangement grid",
+        }
+    else:
+        selected_arrangement_score, selected_arrangement_debug = arrangement_grid_score(librosa, y, sr, display_bpm)
     confidence, confidence_debug = bpm_confidence_from_agreement(
         librosa,
         y,
@@ -1397,7 +1609,20 @@ def key_gap_ratio(candidates):
     return (best_score - second_score) / best_score
 
 
-def detect_key(librosa, y, sr, essentia_candidates=None, tuning_bins=0.0, tuning_correction_applied=False):
+def key_independent_methods(candidate):
+    methods = set()
+    for source in candidate.get("sources", []):
+        text = str(source)
+        if "keyfinder" in text:
+            methods.add("keyfinder")
+        elif "essentia" in text:
+            methods.add("essentia")
+        elif "chroma_cqt" in text or "chroma_stft" in text or "hpcp" in text:
+            methods.add("chroma")
+    return methods
+
+
+def detect_key(librosa, y, sr, essentia_candidates=None, keyfinder_candidate=None, filename_key_hint=None, tuning_bins=0.0, tuning_correction_applied=False):
     import numpy as np
 
     buckets = {}
@@ -1458,9 +1683,36 @@ def detect_key(librosa, y, sr, essentia_candidates=None, tuning_bins=0.0, tuning
         if key and mode in ("major", "minor"):
             add_key_scores(buckets, [(confidence, key, mode, "essentia")], "essentia", 0.72)
 
+    if keyfinder_candidate:
+        key = sharp_key(keyfinder_candidate.get("key")) if isinstance(keyfinder_candidate, dict) else None
+        mode = keyfinder_candidate.get("mode") if isinstance(keyfinder_candidate, dict) else None
+        if key and mode in ("major", "minor"):
+            add_key_scores(buckets, [(0.78, key, mode, "keyfinder")], "keyfinder", 0.95)
+
     candidates = sorted(buckets.values(), key=lambda item: item["score"], reverse=True)
     if not candidates:
         return None, None, 0, [], {"harmonicRatio": 0, "rejected": rejected, "windows": window_debug}
+
+    filename_key_boosted = False
+    if filename_key_hint:
+        hint_key = filename_key_hint.get("key")
+        hint_mode = filename_key_hint.get("mode")
+        supported_hint = next(
+            (
+                item
+                for item in candidates[:5]
+                if item.get("key") == hint_key
+                and (hint_mode is None or item.get("mode") == hint_mode)
+            ),
+            None,
+        )
+        if supported_hint:
+            supported_hint["score"] *= 1.16
+            supported_hint.setdefault("sources", []).append(
+                f"filename_hint:{hint_key}{':' + hint_mode if hint_mode else ''}"
+            )
+            filename_key_boosted = True
+            candidates = sorted(candidates, key=lambda item: item["score"], reverse=True)
 
     best = candidates[0]
     window_consensus_key = max(window_top_votes, key=window_top_votes.get) if window_top_votes else None
@@ -1475,15 +1727,23 @@ def detect_key(librosa, y, sr, essentia_candidates=None, tuning_bins=0.0, tuning
             None,
         )
         if consensus_candidate and consensus_candidate["score"] >= best["score"] * 0.55:
-            candidates = [
-                consensus_candidate,
-                *[
-                    item
-                    for item in candidates
-                    if f"{item['key']}:{item['mode']}" != window_consensus_key
-                ],
-            ]
-            best = candidates[0]
+            best_independent = key_independent_methods(best)
+            consensus_independent = key_independent_methods(consensus_candidate)
+            should_promote_window = (
+                len(consensus_independent) >= len(best_independent)
+                or len(best_independent) < 2
+                or consensus_candidate["score"] >= best["score"] * 0.88
+            )
+            if should_promote_window:
+                candidates = [
+                    consensus_candidate,
+                    *[
+                        item
+                        for item in candidates
+                        if f"{item['key']}:{item['mode']}" != window_consensus_key
+                    ],
+                ]
+                best = candidates[0]
     second_score = candidates[1]["score"] if len(candidates) > 1 else 0.0
     third_score = candidates[2]["score"] if len(candidates) > 2 else 0.0
     total_score = sum(item["score"] for item in candidates[:8]) or 1.0
@@ -1494,9 +1754,13 @@ def detect_key(librosa, y, sr, essentia_candidates=None, tuning_bins=0.0, tuning
     best_sources = best.get("sources", [])
     best_methods = set()
     for source in best_sources:
-        for method in ("essentia", "hpcp", "chroma_cqt", "chroma_stft"):
+        for method in ("essentia", "hpcp", "chroma_cqt", "chroma_stft", "keyfinder"):
             if method in str(source):
                 best_methods.add(method)
+    independent_methods = {
+        "keyfinder" if method == "keyfinder" else "essentia" if method == "essentia" else "chroma"
+        for method in best_methods
+    }
 
     # Beat instrumentals often have several harmonically related candidates with
     # very small margins. If the harmonic layer is stable and a candidate wins
@@ -1515,6 +1779,13 @@ def detect_key(librosa, y, sr, essentia_candidates=None, tuning_bins=0.0, tuning
         and len(best.get("sources", [])) >= max(4, len(window_debug))
     ):
         confidence = max(confidence, 0.41)
+
+    if len(independent_methods) >= 2:
+        confidence = max(confidence, 0.56)
+        if "keyfinder" in independent_methods:
+            confidence = min(0.88, confidence + 0.06)
+    elif "keyfinder" in independent_methods:
+        confidence = min(confidence, 0.49)
 
     # Relative major/minor pairs often tie in beat material. Keep both candidates
     # visible and lower confidence instead of inventing certainty.
@@ -1556,6 +1827,13 @@ def detect_key(librosa, y, sr, essentia_candidates=None, tuning_bins=0.0, tuning
         if selected_key:
             reason += "; significant tuning offset, marked as possible"
 
+    if selected_key and len(independent_methods) < 2 and confidence >= 0.55:
+        confidence = 0.54
+        top = top_key_candidates(candidates, confidence, 3)
+        reason += "; single independent key method, downgraded to possible"
+    if selected_key and filename_key_boosted:
+        reason += "; filename key hint boosted an audio-supported candidate"
+
     if confidence < 0.4 and (not selected_key or gap_ratio < 0.1):
         return None, None, confidence, top, {
             "harmonicRatio": harmonic_ratio,
@@ -1567,6 +1845,10 @@ def detect_key(librosa, y, sr, essentia_candidates=None, tuning_bins=0.0, tuning
             "topKeyCandidates": top_key_candidates(candidates, confidence, 5),
             "topKeyGap": round(float(gap_ratio), 4),
             "tuningCorrectionApplied": tuning_correction_applied,
+            "selectedMethods": sorted(best_methods),
+            "selectedIndependentMethods": sorted(independent_methods),
+            "keyfinder": keyfinder_candidate,
+            "filenameKeyHint": filename_key_hint,
         }
 
     return selected_key, selected_mode, confidence, top, {
@@ -1579,6 +1861,10 @@ def detect_key(librosa, y, sr, essentia_candidates=None, tuning_bins=0.0, tuning
         "topKeyCandidates": top_key_candidates(candidates, confidence, 5),
         "topKeyGap": round(float(gap_ratio), 4),
         "tuningCorrectionApplied": tuning_correction_applied,
+        "selectedMethods": sorted(best_methods),
+        "selectedIndependentMethods": sorted(independent_methods),
+        "keyfinder": keyfinder_candidate,
+        "filenameKeyHint": filename_key_hint,
     }
 
 
@@ -1649,6 +1935,12 @@ def analyze_with_essentia(audio_file):
 
 
 def main():
+    started_at = time.perf_counter()
+    timings = {}
+
+    def mark_timing(name, start):
+        timings[name] = round((time.perf_counter() - start) * 1000, 2)
+
     parser = argparse.ArgumentParser()
     parser.add_argument("audio_file")
     parser.add_argument("--duration", type=float, default=150.0)
@@ -1665,33 +1957,53 @@ def main():
     try:
         essentia_data, essentia_error = (None, None)
         if args.mode != "fast":
+            stage_started = time.perf_counter()
             essentia_data, essentia_error = analyze_with_essentia(args.audio_file)
+            mark_timing("essentiaMs", stage_started)
         if essentia_error:
             print(f"Essentia analysis failed, falling back: {essentia_error}", file=sys.stderr)
+        keyfinder_data, keyfinder_error = (None, None)
+        if args.mode != "fast" and os.environ.get("DISABLE_KEYFINDER_ANALYZER") != "true":
+            stage_started = time.perf_counter()
+            keyfinder_data, keyfinder_error = run_keyfinder(args.audio_file)
+            mark_timing("keyFinderMs", stage_started)
+        if keyfinder_error and args.debug:
+            print(f"KeyFinder unavailable: {keyfinder_error}", file=sys.stderr)
 
-        y, sr = librosa.load(args.audio_file, sr=44100, mono=True, duration=args.duration)
+        load_started = time.perf_counter()
+        load_sr = 11025 if args.mode == "fast" else 44100
+        load_duration = min(args.duration, 45.0) if args.mode == "fast" else args.duration
+        y, sr = librosa.load(args.audio_file, sr=load_sr, mono=True, duration=load_duration)
+        mark_timing("loadMs", load_started)
         if len(y) == 0:
             print(json.dumps(empty_result("empty audio")))
             return 0
+        preprocess_started = time.perf_counter()
         y, preprocessing_debug = preprocess_audio(librosa, y, sr)
+        mark_timing("preprocessMs", preprocess_started)
         tuning_bins = 0.0
         tuning_cents = 0.0
-        try:
-            tuning_bins = float(librosa.estimate_tuning(y=y, sr=sr))
-            if not math.isfinite(tuning_bins):
+        if args.mode != "fast":
+            tuning_started = time.perf_counter()
+            try:
+                tuning_bins = float(librosa.estimate_tuning(y=y, sr=sr))
+                if not math.isfinite(tuning_bins):
+                    tuning_bins = 0.0
+                tuning_cents = round(float(tuning_bins * 100), 2)
+            except Exception:
                 tuning_bins = 0.0
-            tuning_cents = round(float(tuning_bins * 100), 2)
-        except Exception:
-            tuning_bins = 0.0
-            tuning_cents = 0.0
+                tuning_cents = 0.0
+            mark_timing("tuningMs", tuning_started)
         key_audio = y
         tuning_correction_applied = False
-        if abs(tuning_bins) > 0.01:
+        if args.mode != "fast" and abs(tuning_bins) > 0.01:
+            tuning_shift_started = time.perf_counter()
             try:
                 key_audio = librosa.effects.pitch_shift(y, sr=sr, n_steps=-tuning_bins)
                 tuning_correction_applied = True
             except Exception:
                 key_audio = y
+            mark_timing("tuningShiftMs", tuning_shift_started)
         analysis_audio_debug = {}
         try:
             import numpy as np
@@ -1714,9 +2026,15 @@ def main():
         except Exception as error:
             analysis_audio_debug = {"audioDebugError": str(error)}
 
-        madmom_candidates, madmom_error = analyze_with_madmom(args.audio_file)
+        madmom_candidates, madmom_error = ([], None)
+        if args.mode != "fast":
+            stage_started = time.perf_counter()
+            madmom_candidates, madmom_error = analyze_with_madmom(args.audio_file)
+            mark_timing("madmomMs", stage_started)
 
         filename_bpm_hint = extract_filename_bpm_hint(args.audio_file)
+        filename_key_hint = extract_filename_key_hint(args.audio_file)
+        bpm_started = time.perf_counter()
         raw_bpm, bpm_confidence, bpm_candidates, bpm_debug = detect_bpm(
             librosa,
             y,
@@ -1724,7 +2042,9 @@ def main():
             (essentia_data or {}).get("bpmCandidates", []),
             madmom_candidates,
             filename_bpm_hint,
+            fast=args.mode == "fast",
         )
+        mark_timing("fastBpmMs" if args.mode == "fast" else "fullBpmMs", bpm_started)
         bpm, normalized_bpm_candidates, bpm_choice_reason = choose_display_bpm(
             bpm_candidates,
             filename_bpm_hint,
@@ -1738,21 +2058,41 @@ def main():
                 "tuningCorrectionApplied": tuning_correction_applied,
             }
         else:
+            key_started = time.perf_counter()
             key, mode, key_confidence, key_candidates, key_debug = detect_key(
                 librosa,
                 key_audio,
                 sr,
                 (essentia_data or {}).get("keyCandidates", []),
+                keyfinder_data,
+                filename_key_hint,
                 tuning_bins,
                 tuning_correction_applied,
             )
+            mark_timing("roughKeyMs" if args.mode == "fast" else "fullKeyMs", key_started)
         certainty = key_certainty(key_confidence)
+        selected_independent_methods = key_debug.get("selectedIndependentMethods", [])
+        if certainty == "DETECTED" and len(selected_independent_methods) < 2:
+            certainty = "POSSIBLE"
+        if (
+            certainty == "DETECTED"
+            and round(float(key_confidence), 2) in (0.56, 0.62)
+            and len(selected_independent_methods) < 2
+        ):
+            certainty = "POSSIBLE"
         if key and abs(tuning_cents) > 35 and certainty == "DETECTED":
             certainty = "POSSIBLE"
 
-        source = "consensus" if essentia_data else "fallback"
+        source = "consensus" if essentia_data or keyfinder_data else "fallback"
+        timings["arrangementGridMs"] = 0 if args.mode == "fast" else None
+        if args.mode != "fast":
+            timings["arrangementGridMs"] = "included in fullBpmMs"
+        timings["totalMs"] = round((time.perf_counter() - started_at) * 1000, 2)
         result = {
             "analysisVersion": ANALYSIS_VERSION,
+            "analysisMode": args.mode,
+            "analysisStage": "fast" if args.mode == "fast" else "full",
+            "timings": timings,
             "bpm": bpm,
             "bpmConfidence": round(float(bpm_confidence), 4),
             "beatGridConfidence": round(float(bpm_debug.get("beatGridConfidence", 0)), 4),
@@ -1785,6 +2125,7 @@ def main():
                 "tuningCorrectionApplied": tuning_correction_applied,
                 "audio": analysis_audio_debug,
                 "filenameBpmHint": filename_bpm_hint,
+                "filenameKeyHint": filename_key_hint,
                 "selected": {
                     "bpm": bpm,
                     "rawBpm": raw_bpm,
@@ -1857,6 +2198,10 @@ def main():
                 "keySelection": {
                     "windowCandidates": key_debug.get("windows", []),
                     "topKeyCandidates": key_debug.get("topKeyCandidates", key_candidates),
+                    "essentiaKeyCandidates": (essentia_data or {}).get("keyCandidates", []),
+                    "keyFinder": key_debug.get("keyfinder", keyfinder_data),
+                    "selectedMethods": key_debug.get("selectedMethods", []),
+                    "selectedIndependentMethods": key_debug.get("selectedIndependentMethods", []),
                     "topKeyGap": key_debug.get("topKeyGap"),
                     "possibleKey": key_debug.get("possibleKey"),
                     "selectionReason": key_debug.get("selectionReason"),
@@ -1870,6 +2215,7 @@ def main():
                     "bpm": bpm_debug.get("rejected", []),
                     "key": key_debug.get("rejected", []),
                     "essentia": (essentia_data or {}).get("errors", []),
+                    "keyfinder": [keyfinder_error] if keyfinder_error else [],
                     "madmom": [madmom_error] if madmom_error else [],
                 },
             }

@@ -1,0 +1,1 @@
+ALTER TABLE "RapBeat" ADD COLUMN "beatGridConfidence" DOUBLE PRECISION;

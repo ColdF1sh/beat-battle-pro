@@ -17,10 +17,14 @@ function shouldAllowAll() {
   return process.argv.includes("--all");
 }
 
+function shouldForceFull() {
+  return process.argv.includes("--full");
+}
+
 function getBeatArg() {
   return process.argv
     .slice(2)
-    .find((arg) => arg !== "--force" && arg !== "--all");
+    .find((arg) => arg !== "--force" && arg !== "--all" && arg !== "--full");
 }
 
 function resolveBeats(input: string) {
@@ -51,7 +55,7 @@ function resolveBeats(input: string) {
   throw new Error(`Could not find beat matching "${input}"`);
 }
 
-async function analyzeBeat(beat: GlobalLocalRapBeat, force: boolean) {
+async function analyzeBeat(beat: GlobalLocalRapBeat, force: boolean, full: boolean) {
   if (!getPublicAudioFilePath(beat.fileUrl)) {
     throw new Error(`Beat file is missing on disk: ${beat.fileUrl}`);
   }
@@ -107,7 +111,9 @@ async function analyzeBeat(beat: GlobalLocalRapBeat, force: boolean) {
     });
   }
 
-  const result = await analyzeAndCacheRapBeat(prisma, rapBeat.id);
+  const result = await analyzeAndCacheRapBeat(prisma, rapBeat.id, {
+    mode: full ? "full" : "staged",
+  });
 
   console.log(
     JSON.stringify({
@@ -123,6 +129,8 @@ async function analyzeBeat(beat: GlobalLocalRapBeat, force: boolean) {
       keyCertainty: result?.keyCertainty ?? "UNKNOWN",
       referenceAHz: result?.referenceAHz ?? null,
       source: result?.source ?? null,
+      stage: result?.analysisStage ?? null,
+      timings: result?.timings ?? null,
       analysisVersion: result?.analysisVersion ?? null,
       bpmCandidates: result?.bpmCandidates ?? [],
       keyCandidates: result?.keyCandidates ?? [],
@@ -140,6 +148,7 @@ async function main() {
   }
 
   const force = shouldForce();
+  const full = shouldForceFull();
   const beats = resolveBeats(beatArg);
 
   if (beats.length > 1 && !shouldAllowAll()) {
@@ -153,7 +162,7 @@ async function main() {
   }
 
   for (const beat of beats) {
-    await analyzeBeat(beat, force);
+    await analyzeBeat(beat, force, full);
   }
 }
 

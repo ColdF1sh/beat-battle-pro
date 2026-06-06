@@ -1,0 +1,2 @@
+ALTER TABLE "RapBeat" ADD COLUMN "referenceAHz" DOUBLE PRECISION;
+ALTER TABLE "RapBeat" ADD COLUMN "analysisVersion" TEXT;

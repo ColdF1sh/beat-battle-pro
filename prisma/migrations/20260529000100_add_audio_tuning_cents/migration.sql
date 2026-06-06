@@ -1,0 +1,2 @@
+ALTER TABLE "RapBeat" ADD COLUMN "tuningCents" DOUBLE PRECISION;
+ALTER TABLE "BattleSubmission" ADD COLUMN "tuningCents" DOUBLE PRECISION;

@@ -1,0 +1,8 @@
+ALTER TABLE "RapBeat" ADD COLUMN "analysisStatus" TEXT NOT NULL DEFAULT 'PENDING';
+
+UPDATE "RapBeat"
+SET "analysisStatus" = CASE
+  WHEN "detectedBpm" IS NOT NULL OR "detectedKey" IS NOT NULL THEN 'COMPLETE'
+  WHEN "analyzedAt" IS NOT NULL THEN 'FAILED'
+  ELSE 'PENDING'
+END;

@@ -1,0 +1,2 @@
+ALTER TABLE "Battle" ADD COLUMN "votingStartedAt" TIMESTAMP(3);
+ALTER TABLE "Battle" ADD COLUMN "votingEndsAt" TIMESTAMP(3);

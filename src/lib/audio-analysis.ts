@@ -16,11 +16,14 @@ const execFileAsync = promisify(execFile);
 const ANALYZER_TIMEOUT_MS = 120_000;
 const DOCKER_ANALYZER_TIMEOUT_MS = 180_000;
 const FAILED_ANALYSIS_RETRY_MS = 60_000;
-export const AUDIO_ANALYSIS_VERSION = "mir-v5.1-rap-display-certainty";
+export const AUDIO_ANALYSIS_VERSION = "mir-v5.3-optional-keyfinder";
 
 export type AudioAnalysisResult = AudioRuleAnalysis & {
   source: "manual" | "essentia" | "fallback" | "consensus" | "auto";
   analysisVersion?: string;
+  analysisMode?: "fast" | "full" | "debug";
+  analysisStage?: "fast" | "full" | "staged";
+  timings?: Record<string, number | string>;
   beatGridConfidence?: number;
   referenceAHz?: number | null;
   keyCertainty?: "DETECTED" | "POSSIBLE" | "UNKNOWN";
@@ -41,6 +44,7 @@ export type AudioAnalysisResult = AudioRuleAnalysis & {
     confidence: number;
     score?: number;
     methods?: string[];
+    sources?: string[];
   }>;
 };
 type AudioAnalysisWithMetadata = AudioAnalysisResult;
@@ -176,6 +180,9 @@ function parseAnalysis(stdout: string): AudioAnalysisWithMetadata | null {
             const methods = Array.isArray(item.methods)
               ? item.methods.filter((method): method is string => typeof method === "string")
               : undefined;
+            const sources = Array.isArray(item.sources)
+              ? item.sources.filter((source): source is string => typeof source === "string")
+              : undefined;
 
             return candidateKey && candidateMode
               ? {
@@ -184,6 +191,7 @@ function parseAnalysis(stdout: string): AudioAnalysisWithMetadata | null {
                   confidence: coerceConfidence(item.confidence),
                   score: coerceNumber(item.score) ?? undefined,
                   methods,
+                  sources,
                 }
               : null;
           })
@@ -196,6 +204,22 @@ function parseAnalysis(stdout: string): AudioAnalysisWithMetadata | null {
       analysisVersion:
         typeof parsed.analysisVersion === "string"
           ? parsed.analysisVersion
+          : undefined,
+      analysisMode:
+        parsed.analysisMode === "fast" ||
+        parsed.analysisMode === "full" ||
+        parsed.analysisMode === "debug"
+          ? parsed.analysisMode
+          : undefined,
+      analysisStage:
+        parsed.analysisStage === "fast" ||
+        parsed.analysisStage === "full" ||
+        parsed.analysisStage === "staged"
+          ? parsed.analysisStage
+          : undefined,
+      timings:
+        parsed.timings && typeof parsed.timings === "object"
+          ? (parsed.timings as Record<string, number | string>)
           : undefined,
       beatGridConfidence: coerceConfidence(parsed.beatGridConfidence),
       referenceAHz: coerceNumber(parsed.referenceAHz),
@@ -370,7 +394,13 @@ async function ensureDockerAnalyzerService() {
   throw new Error("Docker analyzer service did not become healthy");
 }
 
-async function runDockerAnalyzerService(audioFilePath: string) {
+type AnalyzerRunMode = "fast" | "full" | "debug";
+type AnalyzerRequestMode = AnalyzerRunMode | "staged";
+
+async function runDockerAnalyzerService(
+  audioFilePath: string,
+  mode: AnalyzerRunMode,
+) {
   if (process.env.DISABLE_ANALYZER_SERVICE === "true") {
     return null;
   }
@@ -389,6 +419,7 @@ async function runDockerAnalyzerService(audioFilePath: string) {
     },
     body: JSON.stringify({
       filePath: dockerAudioFilePath,
+      mode,
     }),
     signal: AbortSignal.timeout(DOCKER_ANALYZER_TIMEOUT_MS),
   });
@@ -400,6 +431,84 @@ async function runDockerAnalyzerService(audioFilePath: string) {
   }
 
   return parseAnalysis(text);
+}
+
+function candidateSupportsSelected(candidateBpm: number, selectedBpm: number) {
+  const variants = normalizeTempoCandidates(candidateBpm);
+  return variants.some((value) => Math.abs(value - selectedBpm) <= 3);
+}
+
+function hasConflictingBpmClass(result: AudioAnalysisWithMetadata) {
+  const selectedBpm = result.bpm;
+  const candidates = result.bpmCandidates ?? [];
+
+  if (selectedBpm === null || candidates.length < 2) {
+    return false;
+  }
+
+  const strongest = candidates[0]?.score ?? 0;
+  if (strongest <= 0) {
+    return true;
+  }
+
+  return candidates.slice(1, 6).some((candidate) => {
+    if (candidateSupportsSelected(candidate.bpm, selectedBpm)) {
+      return false;
+    }
+    return candidate.score >= strongest * 0.58;
+  });
+}
+
+function shouldAcceptFastAnalysis(result: AudioAnalysisWithMetadata) {
+  return Boolean(
+    result.bpm !== null &&
+      result.bpmConfidence >= 0.75 &&
+      !hasConflictingBpmClass(result),
+  );
+}
+
+async function runStagedDockerAnalyzerService(audioFilePath: string) {
+  const fastStarted = Date.now();
+  const fastResult = await runDockerAnalyzerService(audioFilePath, "fast");
+  const fastMs = Date.now() - fastStarted;
+
+  if (fastResult && shouldAcceptFastAnalysis(fastResult)) {
+    return {
+      ...fastResult,
+      analysisStage: "fast" as const,
+      timings: {
+        ...(fastResult.timings ?? {}),
+        stagedFastMs: fastMs,
+        stagedDecision: "fast-accepted",
+      },
+    } satisfies AudioAnalysisWithMetadata;
+  }
+
+  const fullStarted = Date.now();
+  const fullResult = await runDockerAnalyzerService(audioFilePath, "full");
+  const fullMs = Date.now() - fullStarted;
+
+  if (!fullResult) {
+    return fastResult;
+  }
+
+  return {
+    ...fullResult,
+    analysisStage: "full" as const,
+    timings: {
+      ...(fullResult.timings ?? {}),
+      stagedFastMs: fastMs,
+      stagedFullMs: fullMs,
+      stagedDecision: fastResult
+        ? "full-after-ambiguous-fast"
+        : "full-after-fast-empty",
+      fastBpm: fastResult?.bpm ?? "none",
+      fastBpmConfidence: fastResult?.bpmConfidence ?? 0,
+      fastLoadMs: fastResult?.timings?.loadMs ?? "none",
+      fastBpmMs: fastResult?.timings?.fastBpmMs ?? "none",
+      fastTotalMs: fastResult?.timings?.totalMs ?? "none",
+    },
+  } satisfies AudioAnalysisWithMetadata;
 }
 
 async function runDockerAnalyzer(audioFilePath: string) {
@@ -466,7 +575,10 @@ async function runDockerAnalyzer(audioFilePath: string) {
   }
 }
 
-export async function analyzeAudioFile(audioFilePath: string) {
+export async function analyzeAudioFile(
+  audioFilePath: string,
+  requestMode: AnalyzerRequestMode = "staged",
+) {
   if (!existsSync(audioFilePath)) {
     console.warn("Audio analysis skipped because file does not exist", {
       audioFilePath,
@@ -485,16 +597,27 @@ export async function analyzeAudioFile(audioFilePath: string) {
   });
 
   try {
-    const serviceResult = await runDockerAnalyzerService(audioFilePath);
+    const analyzerMode =
+      process.env.ANALYZER_MODE === "fast" ||
+      process.env.ANALYZER_MODE === "full" ||
+      process.env.ANALYZER_MODE === "debug"
+        ? (process.env.ANALYZER_MODE as AnalyzerRunMode)
+        : requestMode;
+    const serviceResult =
+      analyzerMode === "staged"
+        ? await runStagedDockerAnalyzerService(audioFilePath)
+        : await runDockerAnalyzerService(audioFilePath, analyzerMode);
 
     if (serviceResult) {
       console.info("Docker Essentia analyzer service completed", {
         filePath: audioFilePath,
+        stage: serviceResult.analysisStage,
         bpm: serviceResult.bpm,
         key: serviceResult.key,
         mode: serviceResult.mode,
         bpmConfidence: serviceResult.bpmConfidence,
         keyConfidence: serviceResult.keyConfidence,
+        timings: serviceResult.timings,
       });
       return serviceResult;
     }
@@ -562,7 +685,10 @@ export async function analyzeAudioFile(audioFilePath: string) {
   return null;
 }
 
-export async function analyzePublicAudioUrl(fileUrl: string) {
+export async function analyzePublicAudioUrl(
+  fileUrl: string,
+  requestMode: AnalyzerRequestMode = "staged",
+) {
   const filePath = getPublicAudioFilePath(fileUrl);
 
   if (!filePath) {
@@ -572,12 +698,15 @@ export async function analyzePublicAudioUrl(fileUrl: string) {
     return null;
   }
 
-  return analyzeAudioFile(filePath);
+  return analyzeAudioFile(filePath, requestMode);
 }
 
 export async function analyzeAndCacheRapBeat(
   client: AudioAnalysisClient,
   rapBeatId: string,
+  options: {
+    mode?: AnalyzerRequestMode;
+  } = {},
 ) {
   const rapBeat = await client.rapBeat.findUnique({
     where: {
@@ -631,6 +760,8 @@ export async function analyzeAndCacheRapBeat(
       beatGridConfidence: rapBeat.beatGridConfidence ?? 0,
       referenceAHz: rapBeat.referenceAHz,
       analysisVersion: rapBeat.analysisVersion ?? undefined,
+      analysisStage: undefined,
+      timings: undefined,
       key: rapBeat.detectedKey,
       mode: coerceMode(rapBeat.detectedMode),
       keyConfidence: rapBeat.keyConfidence ?? 0,
@@ -659,7 +790,8 @@ export async function analyzeAndCacheRapBeat(
     fileUrl: rapBeat.fileUrl,
   });
 
-  const result = await analyzePublicAudioUrl(rapBeat.fileUrl);
+  const analysisStartedAt = Date.now();
+  const result = await analyzePublicAudioUrl(rapBeat.fileUrl, options.mode ?? "staged");
   const analyzedAt = new Date();
   const analysisStatus = result && (result.bpm !== null || result.key) ? "COMPLETE" : "FAILED";
 
@@ -677,6 +809,8 @@ export async function analyzeAndCacheRapBeat(
       beatGridConfidence: rapBeat.beatGridConfidence ?? 0,
       referenceAHz: rapBeat.referenceAHz,
       analysisVersion: rapBeat.analysisVersion ?? undefined,
+      analysisStage: undefined,
+      timings: undefined,
       key: rapBeat.detectedKey,
       mode: coerceMode(rapBeat.detectedMode),
       keyConfidence: rapBeat.keyConfidence ?? 0,
@@ -692,6 +826,7 @@ export async function analyzeAndCacheRapBeat(
     } satisfies AudioAnalysisResult;
   }
 
+  const prismaStartedAt = Date.now();
   await client.rapBeat.update({
     where: {
       id: rapBeat.id,
@@ -722,14 +857,28 @@ export async function analyzeAndCacheRapBeat(
         : null,
     },
   });
+  const prismaUpdateMs = Date.now() - prismaStartedAt;
+  const totalWrapperMs = Date.now() - analysisStartedAt;
+  const resultWithTimings = result
+    ? ({
+        ...result,
+        timings: {
+          ...(result.timings ?? {}),
+          prismaUpdateMs,
+          totalWrapperMs,
+        },
+      } satisfies AudioAnalysisResult)
+    : result;
 
-  if (result) {
+  if (resultWithTimings) {
     console.info("Rap beat analysis saved", {
       rapBeatId: rapBeat.id,
-      bpm: result.bpm,
-      key: result.key,
-      mode: result.mode,
-      source: result.source,
+      bpm: resultWithTimings.bpm,
+      key: resultWithTimings.key,
+      mode: resultWithTimings.mode,
+      source: resultWithTimings.source,
+      stage: resultWithTimings.analysisStage,
+      timings: resultWithTimings.timings,
     });
   } else {
     console.warn("Rap beat analysis saved empty fallback", {
@@ -738,7 +887,7 @@ export async function analyzeAndCacheRapBeat(
     });
   }
 
-  return result;
+  return resultWithTimings;
 }
 
 export async function analyzeAndCacheBattleSubmission(

@@ -7,8 +7,26 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Semaphore
 
 
-ANALYZER_CONCURRENCY = max(1, int(os.environ.get("ANALYZER_SERVICE_CONCURRENCY", "1")))
+ANALYZER_CONCURRENCY = max(
+    1,
+    int(
+        os.environ.get(
+            "ANALYZER_SERVICE_CONCURRENCY",
+            os.environ.get("ANALYZER_CONCURRENCY", "1"),
+        )
+    ),
+)
 ANALYZER_SEMAPHORE = Semaphore(ANALYZER_CONCURRENCY)
+
+
+def endpoint_mode(path):
+    if path == "/analyze":
+        return os.environ.get("ANALYZER_MODE", "full")
+    if path == "/analyze-bpm":
+        return "fast"
+    if path == "/analyze-key":
+        return "full"
+    return None
 
 
 class AnalyzerHandler(BaseHTTPRequestHandler):
@@ -27,7 +45,8 @@ class AnalyzerHandler(BaseHTTPRequestHandler):
         self._write_json(404, {"error": "not found"})
 
     def do_POST(self):
-        if self.path != "/analyze":
+        mode = endpoint_mode(self.path)
+        if mode is None:
             self._write_json(404, {"error": "not found"})
             return
 
@@ -36,6 +55,9 @@ class AnalyzerHandler(BaseHTTPRequestHandler):
             payload = json.loads(self.rfile.read(length).decode("utf-8"))
             file_path = payload["filePath"]
             debug = bool(payload.get("debug"))
+            request_mode = str(payload.get("mode") or mode)
+            if request_mode not in ("fast", "full", "debug"):
+                raise ValueError("mode must be fast, full, or debug")
         except Exception as error:
             self._write_json(400, {"error": f"invalid request: {error}"})
             return
@@ -44,6 +66,8 @@ class AnalyzerHandler(BaseHTTPRequestHandler):
             sys.executable,
             "scripts/analyze-audio-key-bpm.py",
             file_path,
+            "--mode",
+            request_mode,
         ]
         if debug:
             command.append("--debug")

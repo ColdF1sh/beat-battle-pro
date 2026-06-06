@@ -1,0 +1,8 @@
+ALTER TABLE "RapBeat" ADD COLUMN "title" TEXT;
+ALTER TABLE "RapBeat" ADD COLUMN "bpm" INTEGER;
+ALTER TABLE "RapBeat" ADD COLUMN "key" TEXT;
+ALTER TABLE "RapBeat" ADD COLUMN "producerUsername" TEXT;
+ALTER TABLE "RapBeat" ADD COLUMN "producerAvatarUrl" TEXT;
+ALTER TABLE "RapBeat" ADD COLUMN "producerElo" INTEGER;
+ALTER TABLE "RapBeat" ADD COLUMN "producerWins" INTEGER;
+ALTER TABLE "RapBeat" ADD COLUMN "producerGames" INTEGER;
