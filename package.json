@@ -4,7 +4,8 @@
   "private": true,
   "scripts": {
     "dev": "next dev --webpack",
-    "build": "next build --webpack",
+    "postinstall": "prisma generate",
+    "build": "prisma generate && next build --webpack",
     "start": "next start",
     "db:cleanup:matchmaking": "tsx scripts/cleanup-dev-matchmaking.ts",
     "db:cleanup:dev-fake": "tsx scripts/cleanup-dev-fake-players.ts",
